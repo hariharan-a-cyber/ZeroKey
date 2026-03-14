@@ -1,29 +1,73 @@
-# Built objects
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
 bin/
 gen/
+out/
 build/
 
 # Gradle files
 .gradle/
+gradle-app.setting
+!gradle-wrapper.jar
 
-# Local configuration file (sdk path, etc)
+# Local configuration file (SDK path etc)
 local.properties
+
+# Proguard
+proguard/
 
 # Log Files
 *.log
 
-# Android Studio configuration
+# Android Studio
 .idea/
 *.iml
-.navigation/
+*.ipr
+*.iws
 
-# Captures
-captures/
+# Keystore files
+*.jks
+*.keystore
 
-# External Native Build
+# External native build folder
 .externalNativeBuild/
 .cxx/
 
-# OS specific files
+# Google Services
+google-services.json
+
+# Navigation auto-generated files
+.navigation/
+
+# Captures (Android Studio screenshots)
+captures/
+
+# OS files
 .DS_Store
 Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Kotlin build
+.kotlin/
+
+# Gradle cache
+.gradle-cache/
+
+# Firebase crash logs
+com_crashlytics_export_strings.xml
+
+# Android profiling
+*.hprof
