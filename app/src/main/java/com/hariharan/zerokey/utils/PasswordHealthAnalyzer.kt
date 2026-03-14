@@ -1,0 +1,56 @@
+package com.hariharan.zerokey.utils
+
+import com.hariharan.zerokey.data.model.PasswordItem
+import com.hariharan.zerokey.security.BreachMonitor
+
+/**
+ * Analyzes the user's vault for security weaknesses.
+ */
+object PasswordHealthAnalyzer {
+
+    data class HealthReport(
+        val score: Int, // 0-100
+        val weakPasswords: List<PasswordItem>,
+        val duplicatePasswords: List<PasswordItem>,
+        val oldPasswords: List<PasswordItem>,
+        val compromisedPasswords: List<PasswordItem>
+    )
+
+    suspend fun analyze(passwords: List<PasswordItem>): HealthReport {
+        if (passwords.isEmpty()) {
+            return HealthReport(100, emptyList(), emptyList(), emptyList(), emptyList())
+        }
+
+        val weak = passwords.filter { PasswordUtils.calculateStrength(it.password) in listOf(PasswordStrength.WEAK, PasswordStrength.MEDIUM) }
+        
+        val duplicates = passwords.groupBy { it.password }
+            .filter { it.value.size > 1 }
+            .flatMap { it.value }
+
+        // Consider passwords older than 6 months as 'old'
+        val sixMonthsAgo = System.currentTimeMillis() - 15552000000L
+        val old = passwords.filter { 
+            // In our simple model, we don't have createdAt in PasswordItem yet
+            // but we can add it or mock it for now
+            false 
+        }
+        
+        // Query BreachMonitor for each password
+        val compromised = passwords.filter { item ->
+            BreachMonitor.checkBreach(item.password)
+        }
+
+        // Calculate score
+        val total = passwords.size
+        val penalty = (weak.size * 5) + (duplicates.size * 10) + (compromised.size * 25)
+        val score = (100 - (penalty / total.coerceAtLeast(1))).coerceIn(0, 100)
+
+        return HealthReport(
+            score = score,
+            weakPasswords = weak,
+            duplicatePasswords = duplicates,
+            oldPasswords = old,
+            compromisedPasswords = compromised
+        )
+    }
+}

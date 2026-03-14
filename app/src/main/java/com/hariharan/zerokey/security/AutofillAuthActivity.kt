@@ -12,18 +12,22 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.hariharan.zerokey.R
+import com.hariharan.zerokey.data.database.PasswordDatabase
+import com.hariharan.zerokey.data.repository.PasswordRepository
+import com.hariharan.zerokey.utils.SensitiveDataManager
+import kotlinx.coroutines.runBlocking
 
 /**
  * Invisible activity that handles Biometric Authentication for Autofill.
- * Ensures passwords are only decrypted after successful user authentication.
+ * Decrypts the password ONLY after successful authentication.
  */
 class AutofillAuthActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val itemId = intent.getIntExtra("itemId", -1)
         val username = intent.getStringExtra("username")
-        val password = intent.getStringExtra("password")
         
         val usernameId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra("usernameId", AutofillId::class.java)
@@ -39,7 +43,7 @@ class AutofillAuthActivity : FragmentActivity() {
             intent.getParcelableExtra("passwordId")
         }
 
-        if (username == null || password == null || usernameId == null || passwordId == null) {
+        if (itemId == -1 || username == null || usernameId == null || passwordId == null) {
             setResult(Activity.RESULT_CANCELED)
             finish()
             return
@@ -51,21 +55,36 @@ class AutofillAuthActivity : FragmentActivity() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
                     
-                    val replyIntent = Intent().apply {
-                        val presentation = RemoteViews(packageName, R.layout.autofill_suggestion).apply {
-                            setTextViewText(R.id.autofill_username, username)
-                        }
-
-                        val dataset = Dataset.Builder()
-                            .setValue(usernameId, AutofillValue.forText(username), presentation)
-                            .setValue(passwordId, AutofillValue.forText(password), presentation)
-                            .build()
-
-                        // Explicitly using the full path to resolve compilation ambiguity
-                        putExtra(android.view.autofill.AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
-                    }
+                    // Decrypt the password now that the user is authenticated
+                    val database = PasswordDatabase.getDatabase(this@AutofillAuthActivity)
+                    val repository = PasswordRepository(database.passwordDao())
                     
-                    setResult(Activity.RESULT_OK, replyIntent)
+                    val password = runBlocking {
+                        repository.getPasswordById(itemId)?.password
+                    }
+
+                    if (password != null) {
+                        val replyIntent = Intent().apply {
+                            val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
+                                setTextViewText(android.R.id.text1, username)
+                            }
+
+                            val dataset = Dataset.Builder(presentation)
+                                .setValue(usernameId, AutofillValue.forText(username))
+                                .setValue(passwordId, AutofillValue.forText(password))
+                                .build()
+
+                            putExtra(android.view.autofill.AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
+                        }
+                        
+                        setResult(Activity.RESULT_OK, replyIntent)
+                        
+                        // Clear password from memory
+                        val passChars = password.toCharArray()
+                        SensitiveDataManager.clearSensitiveData(passChars)
+                    } else {
+                        setResult(Activity.RESULT_CANCELED)
+                    }
                     finish()
                 }
 

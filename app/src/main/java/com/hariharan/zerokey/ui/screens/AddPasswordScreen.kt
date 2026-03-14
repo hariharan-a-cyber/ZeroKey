@@ -1,17 +1,25 @@
 package com.hariharan.zerokey.ui.screens
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.utils.PasswordStrength
 import com.hariharan.zerokey.utils.PasswordUtils
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
@@ -20,116 +28,200 @@ import com.hariharan.zerokey.viewmodel.PasswordViewModel
 @Composable
 fun AddPasswordScreen(
     viewModel: PasswordViewModel,
-    onBack: () -> Unit
+    initialPassword: String = "",
+    onBack: () -> Unit,
+    onGenerateClick: () -> Unit
 ) {
     var serviceName by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf(initialPassword) }
     var notes by remember { mutableStateOf("") }
+
+    // Sync state if initialPassword changes (e.g. returning from generator)
+    LaunchedEffect(initialPassword) {
+        if (initialPassword.isNotEmpty()) {
+            password = initialPassword
+        }
+    }
 
     val strength = remember(password) { PasswordUtils.calculateStrength(password) }
     val isDuplicate = remember(password) { viewModel.isDuplicatePassword(password) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Add Password") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
+    val surfaceColor = MaterialTheme.colorScheme.surface
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        surfaceColor,
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.05f)
+                    )
+                )
             )
-        }
-    ) { padding ->
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .statusBarsPadding()
         ) {
-            OutlinedTextField(
-                value = serviceName,
-                onValueChange = { serviceName = it },
-                label = { Text("Service Name (e.g. Google)") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            OutlinedTextField(
-                value = username,
-                onValueChange = { username = it },
-                label = { Text("Username / Email") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            // Secure Password Field
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Password") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        autoCorrect = false,
-                        keyboardType = KeyboardType.Password
-                    ),
-                    trailingIcon = {
-                        IconButton(onClick = { password = PasswordUtils.generatePassword() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Generate Password")
-                        }
-                    }
-                )
-
-                if (password.isNotEmpty()) {
-                    StrengthMeter(strength)
-                    if (isDuplicate) {
-                        Text(
-                            text = "Warning: This password is used in another account!",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
+                Text(
+                    text = "New Credential",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = (-1).sp
+                    ),
+                    modifier = Modifier.padding(start = 8.dp)
+                )
             }
 
-            OutlinedTextField(
-                value = notes,
-                onValueChange = { notes = it },
-                label = { Text("Notes (Optional)") },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(Modifier.weight(1f))
-
-            Button(
-                onClick = {
-                    if (serviceName.isNotBlank() && password.isNotBlank()) {
-                        viewModel.addPassword(serviceName, username, password, notes)
-                        onBack()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 24.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                Text("Save Password")
+                AddTransparentTextField(
+                    value = serviceName,
+                    onValueChange = { serviceName = it },
+                    label = "Service Name",
+                    placeholder = "e.g. Google, GitHub"
+                )
+
+                AddTransparentTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = "Username / Email",
+                    placeholder = "yourname@example.com"
+                )
+
+                // Secure Password Field with Generator Link
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AddTransparentTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = "Password",
+                        placeholder = "••••••••",
+                        keyboardType = KeyboardType.Password,
+                        trailingIcon = {
+                            IconButton(onClick = onGenerateClick) {
+                                Icon(
+                                    Icons.Default.Refresh, 
+                                    contentDescription = "Generate",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    )
+
+                    if (password.isNotEmpty()) {
+                        StrengthMeter(strength)
+                        if (isDuplicate) {
+                            Text(
+                                text = "Warning: This password is used in another account!",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                AddTransparentTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = "Notes",
+                    placeholder = "Optional account details",
+                    singleLine = false
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                Button(
+                    onClick = {
+                        if (serviceName.isNotBlank() && password.isNotBlank()) {
+                            viewModel.addPassword(serviceName, username, password, notes)
+                            onBack()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(60.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.onSurface,
+                        contentColor = MaterialTheme.colorScheme.surface
+                    ),
+                    enabled = serviceName.isNotBlank() && password.isNotBlank()
+                ) {
+                    Text("Securely Save", fontWeight = FontWeight.Bold)
+                }
+                
+                Spacer(modifier = Modifier.height(32.dp))
             }
         }
     }
 }
 
-// StrengthMeter composable remains the same
+@Composable
+fun AddTransparentTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String = "",
+    keyboardType: KeyboardType = KeyboardType.Text,
+    singleLine: Boolean = true,
+    trailingIcon: @Composable (() -> Unit)? = null
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Medium
+        )
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = trailingIcon,
+            singleLine = singleLine,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                disabledContainerColor = Color.Transparent,
+                focusedIndicatorColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedIndicatorColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                focusedLabelColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        )
+    }
+}
+
 @Composable
 fun StrengthMeter(strength: PasswordStrength) {
     val color by animateColorAsState(
         targetValue = when (strength) {
             PasswordStrength.EMPTY -> Color.Transparent
-            PasswordStrength.WEAK -> Color(0xFFE57373)
-            PasswordStrength.MEDIUM -> Color(0xFFFFB74D)
-            PasswordStrength.STRONG -> Color(0xFF81C784)
-            PasswordStrength.VERY_STRONG -> Color(0xFF4CAF50)
+            PasswordStrength.WEAK -> Color(0xFFF44336)
+            PasswordStrength.MEDIUM -> Color(0xFFFFC107)
+            PasswordStrength.STRONG -> Color(0xFF4CAF50)
+            PasswordStrength.VERY_STRONG -> Color(0xFF00C853)
         }
     )
 
@@ -141,7 +233,7 @@ fun StrengthMeter(strength: PasswordStrength) {
         PasswordStrength.VERY_STRONG -> "Very Strong"
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         LinearProgressIndicator(
             progress = {
                 when (strength) {
@@ -154,14 +246,17 @@ fun StrengthMeter(strength: PasswordStrength) {
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(8.dp),
+                .height(6.dp)
+                .background(Color.Transparent, RoundedCornerShape(4.dp)),
             color = color,
+            trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
             strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
         )
         Text(
-            text = "Strength: $label",
+            text = "Password Strength: $label",
             style = MaterialTheme.typography.labelSmall,
-            color = color.copy(alpha = 0.8f)
+            color = color,
+            fontWeight = FontWeight.Bold
         )
     }
 }

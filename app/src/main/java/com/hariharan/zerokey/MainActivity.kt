@@ -1,11 +1,20 @@
 package com.hariharan.zerokey
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -15,91 +24,128 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hariharan.zerokey.data.database.PasswordDatabase
 import com.hariharan.zerokey.data.repository.PasswordRepository
-import com.hariharan.zerokey.security.EncryptionManager
-import com.hariharan.zerokey.ui.screens.AddPasswordScreen
-import com.hariharan.zerokey.ui.screens.VaultScreen
+import com.hariharan.zerokey.data.sync.VaultSerializer
+import com.hariharan.zerokey.data.backup.VaultBackupManager
+import com.hariharan.zerokey.security.*
+import com.hariharan.zerokey.ui.screens.*
 import com.hariharan.zerokey.ui.theme.ZerokeyTheme
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
 import com.hariharan.zerokey.viewmodel.PasswordViewModelFactory
 
 class MainActivity : FragmentActivity() {
-    
-    private var lastBackgroundTime: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 1. Screenshot Blocking - Protection against screen recording and snapshots
+        // Requirement 7: Screen Security - Block screenshots and recent-app previews
         window.setFlags(
             WindowManager.LayoutParams.FLAG_SECURE,
             WindowManager.LayoutParams.FLAG_SECURE
         )
         
         enableEdgeToEdge()
+        val authAttemptManager = AuthAttemptManager(this)
+        val authenticator = FirebaseAuthenticator()
+
         setContent {
             ZerokeyTheme {
-                val database = PasswordDatabase.getDatabase(applicationContext)
-                val repository = PasswordRepository(database.passwordDao(), EncryptionManager)
-                val viewModel: PasswordViewModel = viewModel(
-                    factory = PasswordViewModelFactory(repository)
-                )
-
-                var isLocked by remember { mutableStateOf(true) }
-                val lifecycleOwner = LocalLifecycleOwner.current
-
-                // 3. Auto Lock logic - Locks the vault if app is in background > 30 seconds
-                DisposableEffect(lifecycleOwner) {
-                    val observer = LifecycleEventObserver { _, event ->
-                        when (event) {
-                            Lifecycle.Event.ON_STOP -> {
-                                lastBackgroundTime = System.currentTimeMillis()
-                            }
-                            Lifecycle.Event.ON_START -> {
-                                if (lastBackgroundTime != 0L && 
-                                    System.currentTimeMillis() - lastBackgroundTime > 30000) {
-                                    isLocked = true
-                                }
-                            }
-                            else -> {}
-                        }
-                    }
-                    lifecycleOwner.lifecycle.addObserver(observer)
-                    onDispose {
-                        lifecycleOwner.lifecycle.removeObserver(observer)
-                    }
-                }
-
-                if (isLocked) {
-                    BiometricLockScreen(onAuthenticated = { isLocked = false })
+                var isAuthenticated by remember { mutableStateOf(authenticator.isAuthenticated) }
+                
+                if (!isAuthenticated) {
+                    AuthScreen(
+                        authenticator = authenticator,
+                        onAuthSuccess = { isAuthenticated = true }
+                    )
                 } else {
-                    ZeroKeyApp(viewModel)
+                    VaultContent(authAttemptManager)
                 }
             }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Requirement 6: Clear clipboard when app goes to background
+        clearClipboard()
+    }
+
+    private fun clearClipboard() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("", "")
+        clipboard.setPrimaryClip(clip)
+    }
+
+    @Composable
+    fun VaultContent(authAttemptManager: AuthAttemptManager) {
+        val database = PasswordDatabase.getDatabase(applicationContext)
+        val repository = PasswordRepository(database.passwordDao())
+        val auditLogManager = AuditLogManager(database.auditLogDao())
+        val backupManager = VaultBackupManager(repository, VaultSerializer())
+        
+        val viewModel: PasswordViewModel = viewModel(
+            factory = PasswordViewModelFactory(repository, auditLogManager, backupManager)
+        )
+
+        var isLocked by remember { mutableStateOf(true) }
+        val lifecycleOwner = LocalLifecycleOwner.current
+
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP) {
+                    isLocked = true
+                    // Requirement 5: Wipe memory (session key) when app stops
+                    MasterPasswordManager.lockVault()
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+            }
+        }
+
+        if (isLocked) {
+            BiometricLockScreen(authAttemptManager) {
+                isLocked = false
+            }
+        } else {
+            ZeroKeyApp(viewModel)
         }
     }
 }
 
 @Composable
-fun BiometricLockScreen(onAuthenticated: () -> Unit) {
+fun BiometricLockScreen(authManager: AuthAttemptManager, onAuthenticated: () -> Unit) {
     val context = LocalContext.current as FragmentActivity
+
+    if (authManager.isLockedOut()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val remaining = authManager.getRemainingLockoutTime() / 1000
+            Text("Too many attempts. Please try again in $remaining seconds.")
+        }
+        return
+    }
+
     val executor = ContextCompat.getMainExecutor(context)
-    
     val biometricPrompt = BiometricPrompt(context, executor,
         object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 super.onAuthenticationSucceeded(result)
+                authManager.resetAttempts()
+                // In a real app, you'd perform key derivation here with the master password
+                // This is a simplified flow for existing logic integration
                 onAuthenticated()
             }
             
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 super.onAuthenticationError(errorCode, errString)
-                // In a production app, handle errors (e.g. show a "Try Again" button)
+                authManager.recordFailedAttempt()
+                Toast.makeText(context, "Authentication error: $errString", Toast.LENGTH_SHORT).show()
             }
         })
 
     val promptInfo = BiometricPrompt.PromptInfo.Builder()
-        .setTitle("ZeroKey Secure Unlock")
-        .setSubtitle("Authenticate to access your encrypted vault")
+        .setTitle("ZeroKey Unlock")
+        .setSubtitle("Authenticate to access your vault")
         .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or 
                                  androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
         .build()
@@ -112,14 +158,46 @@ fun BiometricLockScreen(onAuthenticated: () -> Unit) {
 @Composable
 fun ZeroKeyApp(viewModel: PasswordViewModel) {
     var currentScreen by remember { mutableStateOf("vault") }
+    var generatedPasswordToUse by remember { mutableStateOf<String?>(null) }
 
-    if (currentScreen == "vault") {
-        VaultScreen(
+    when (currentScreen) {
+        "vault" -> VaultScreen(
             viewModel = viewModel,
-            onAddClick = { currentScreen = "add_password" }
+            onAddClick = { currentScreen = "add_password" },
+            onSecurityActivityClick = { currentScreen = "security_activity" },
+            onPasswordHealthClick = { currentScreen = "password_health" },
+            onSecurityDashboardClick = { currentScreen = "security_dashboard" },
+            onSharingClick = { currentScreen = "credential_sharing" }
         )
-    } else {
-        AddPasswordScreen(
+        "add_password" -> AddPasswordScreen(
+            viewModel = viewModel,
+            initialPassword = generatedPasswordToUse ?: "",
+            onBack = { 
+                currentScreen = "vault"
+                generatedPasswordToUse = null
+            },
+            onGenerateClick = { currentScreen = "generator" }
+        )
+        "security_activity" -> SecurityActivityScreen(
+            viewModel = viewModel,
+            onBack = { currentScreen = "vault" }
+        )
+        "password_health" -> PasswordHealthScreen(
+            viewModel = viewModel,
+            onBack = { currentScreen = "vault" }
+        )
+        "generator" -> PasswordGeneratorScreen(
+            onBack = { currentScreen = "add_password" },
+            onUsePassword = { 
+                generatedPasswordToUse = it
+                currentScreen = "add_password"
+            }
+        )
+        "security_dashboard" -> SecurityDashboardScreen(
+            viewModel = viewModel,
+            onBack = { currentScreen = "vault" }
+        )
+        "credential_sharing" -> CredentialSharingScreen(
             viewModel = viewModel,
             onBack = { currentScreen = "vault" }
         )

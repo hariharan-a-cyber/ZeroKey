@@ -1,19 +1,18 @@
 package com.hariharan.zerokey.data.database
 
-import androidx.room.Dao
-import androidx.room.Delete
-import androidx.room.Insert
-import androidx.room.Query
-import androidx.room.Update
+import androidx.room.*
 
 @Dao
 interface PasswordDao {
 
-    @Insert
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPassword(password: PasswordEntity)
 
     @Query("SELECT * FROM passwords")
     suspend fun getAllPasswords(): List<PasswordEntity>
+
+    @Query("SELECT * FROM passwords WHERE id = :id")
+    suspend fun getPasswordById(id: Int): PasswordEntity?
 
     @Query("DELETE FROM passwords WHERE id = :id")
     suspend fun deletePasswordById(id: Int)
@@ -22,7 +21,7 @@ interface PasswordDao {
     suspend fun updatePassword(password: PasswordEntity)
 
     @Query("UPDATE passwords SET isFavorite = :isFavorite WHERE id = :id")
-    suspend fun updateFavoriteStatus(id: Int, isFavorite: Boolean)
+    suspend fun updateFavorite(id: Int, isFavorite: Boolean)
 
     @Delete
     suspend fun deletePassword(password: PasswordEntity)

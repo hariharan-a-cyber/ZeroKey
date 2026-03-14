@@ -6,12 +6,15 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [PasswordEntity::class],
-    version = 1
+    entities = [PasswordEntity::class, VaultMetadata::class, AuditLogEntity::class],
+    version = 3,
+    exportSchema = false
 )
 abstract class PasswordDatabase : RoomDatabase() {
 
     abstract fun passwordDao(): PasswordDao
+    abstract fun vaultMetadataDao(): VaultMetadataDao
+    abstract fun auditLogDao(): AuditLogDao
 
     companion object {
         @Volatile
@@ -23,7 +26,9 @@ abstract class PasswordDatabase : RoomDatabase() {
                     context.applicationContext,
                     PasswordDatabase::class.java,
                     "zerokey_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }

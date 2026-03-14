@@ -1,0 +1,75 @@
+package com.hariharan.zerokey.security
+
+import android.content.Context
+import android.os.Build
+import android.provider.Settings
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.tasks.await
+
+/**
+ * Phase 11: Device Trust System.
+ * Restricts vault sync to devices explicitly trusted by the user.
+ */
+class DeviceTrustManager(
+    private val context: Context,
+    private val firestore: FirebaseFirestore
+) {
+
+    private val COLLECTION_DEVICES = "devices"
+
+    fun getCurrentDeviceId(): String {
+        return Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+    }
+
+    fun getDeviceName(): String {
+        return "${Build.MANUFACTURER} ${Build.MODEL}"
+    }
+
+    /**
+     * Registers the current device in the user's trusted list.
+     * Requires biometric verification before calling this.
+     */
+    suspend fun registerCurrentDevice(userId: String) {
+        val deviceId = getCurrentDeviceId()
+        val deviceData = mapOf(
+            "deviceId" to deviceId,
+            "deviceName" to getDeviceName(),
+            "lastSeen" to System.currentTimeMillis(),
+            "trusted" to true
+        )
+        
+        firestore.collection("users")
+            .document(userId)
+            .collection(COLLECTION_DEVICES)
+            .document(deviceId)
+            .set(deviceData)
+            .await()
+    }
+
+    /**
+     * Checks if the current device is trusted.
+     */
+    suspend fun isCurrentDeviceTrusted(userId: String): Boolean {
+        val deviceId = getCurrentDeviceId()
+        val doc = firestore.collection("users")
+            .document(userId)
+            .collection(COLLECTION_DEVICES)
+            .document(deviceId)
+            .get()
+            .await()
+            
+        return doc.getBoolean("trusted") ?: false
+    }
+
+    /**
+     * Revokes trust from a specific device.
+     */
+    suspend fun revokeDeviceTrust(userId: String, deviceId: String) {
+        firestore.collection("users")
+            .document(userId)
+            .collection(COLLECTION_DEVICES)
+            .document(deviceId)
+            .update("trusted", false)
+            .await()
+    }
+}
