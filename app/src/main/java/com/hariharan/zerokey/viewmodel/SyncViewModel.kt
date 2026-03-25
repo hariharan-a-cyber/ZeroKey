@@ -1,58 +1,91 @@
 package com.hariharan.zerokey.viewmodel
 
-import android.app.Application
-import android.util.Base64
-import androidx.lifecycle.AndroidViewModel
+import android.util.Log
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hariharan.zerokey.security.MasterPasswordManager
-import com.hariharan.zerokey.security.SyncManager
+import com.hariharan.zerokey.sync.DeviceSyncManager
+import com.hariharan.zerokey.sync.PullResult
+import com.hariharan.zerokey.sync.SyncResult
+import com.hariharan.zerokey.data.repository.PasswordRepository
+import com.hariharan.zerokey.data.database.PasswordEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import javax.crypto.SecretKey
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.builtins.ListSerializer
 
-/**
- * Handles the UI state and actions for cloud sync.
- */
 class SyncViewModel(
-    application: Application,
-    private val syncManager: SyncManager
-) : AndroidViewModel(application) {
+    private val repository: PasswordRepository,
+    private val syncManager: DeviceSyncManager
+) : ViewModel() {
 
-    private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
+    private val _syncState = MutableStateFlow<SyncStatus>(SyncStatus.Idle)
     val syncState = _syncState.asStateFlow()
 
-    fun performSync(masterKey: SecretKey, hmacKey: SecretKey) {
+    fun performSync(userId: String) {
         viewModelScope.launch {
-            _syncState.value = SyncState.Syncing
+            _syncState.value = SyncStatus.Syncing
+            
             try {
-                // Fetch the salt from MasterPasswordManager using application context
-                val saltBytes = MasterPasswordManager.getSalt(getApplication())
-                    ?: throw IllegalStateException("Vault salt not found. Please set up your vault first.")
+                val vaultKey = MasterPasswordManager.getVaultKey() 
+                    ?: throw IllegalStateException("Vault is locked")
                 
-                val saltString = Base64.encodeToString(saltBytes, Base64.NO_WRAP)
+                // For simplicity in this implementation, we use the vault key's bytes as both encryption and HMAC keys
+                // In a production app, these would be derived separately from the master key.
+                val encryptionKey = vaultKey.encoded
+                val hmacKey = vaultKey.encoded
 
-                // 1. Download and merge remote changes
-                syncManager.downloadAndMergeVault(masterKey, hmacKey)
+                // 1. Pull and Merge
+                val localPasswords = repository.getPasswords()
+                val localJson = Json.encodeToString(ListSerializer(PasswordEntity.serializer()), localPasswords.map { it.toEntity() })
                 
-                // 2. Upload local changes with the required salt parameter
-                syncManager.uploadEncryptedVault(masterKey, hmacKey, saltString)
-                
-                _syncState.value = SyncState.Success
+                val pullResult = syncManager.pullVaultSnapshot(
+                    userId = userId,
+                    encryptionKey = encryptionKey,
+                    hmacKey = hmacKey,
+                    localVersion = 0,
+                    localVaultJson = localJson
+                )
+
+                when (pullResult) {
+                    is PullResult.Success -> {
+                        val mergedEntities = Json.decodeFromString(ListSerializer(PasswordEntity.serializer()), pullResult.plaintextVault)
+                        repository.syncWithRemote(mergedEntities)
+                        _syncState.value = SyncStatus.Success(System.currentTimeMillis())
+                    }
+                    is PullResult.Conflict -> {
+                        val mergedEntities = Json.decodeFromString(ListSerializer(PasswordEntity.serializer()), pullResult.resolvedVault)
+                        repository.syncWithRemote(mergedEntities)
+                        _syncState.value = SyncStatus.Success(System.currentTimeMillis())
+                    }
+                    is PullResult.NoRemoteVault -> {
+                        val pushResult = syncManager.pushVaultSnapshot(
+                            userId = userId,
+                            plaintextVaultJson = localJson,
+                            encryptionKey = encryptionKey,
+                            hmacKey = hmacKey
+                        )
+                        if (pushResult is SyncResult.Success) {
+                            _syncState.value = SyncStatus.Success(System.currentTimeMillis())
+                        } else {
+                            _syncState.value = SyncStatus.Error("Initial push failed")
+                        }
+                    }
+                    is PullResult.IntegrityFailure -> _syncState.value = SyncStatus.Error("Vault integrity check failed (Security Alert)")
+                    is PullResult.Failure -> _syncState.value = SyncStatus.Error(pullResult.reason)
+                }
             } catch (e: Exception) {
-                _syncState.value = SyncState.Error(e.message ?: "Unknown sync error")
+                Log.e("SyncViewModel", "Sync failed", e)
+                _syncState.value = SyncStatus.Error(e.message ?: "Unknown error")
             }
         }
     }
 
-    fun resetState() {
-        _syncState.value = SyncState.Idle
-    }
-
-    sealed class SyncState {
-        object Idle : SyncState()
-        object Syncing : SyncState()
-        object Success : SyncState()
-        data class Error(val message: String) : SyncState()
+    sealed class SyncStatus {
+        object Idle : SyncStatus()
+        object Syncing : SyncStatus()
+        data class Success(val lastSync: Long) : SyncStatus()
+        data class Error(val message: String) : SyncStatus()
     }
 }

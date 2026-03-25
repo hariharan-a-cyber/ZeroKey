@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,7 +30,10 @@ fun CredentialSharingScreen(
     viewModel: PasswordViewModel,
     onBack: () -> Unit
 ) {
-    var recipientEmail by remember { mutableStateOf("") }
+    var recipientId by remember { mutableStateOf("") }
+    var selectedCredentialId by remember { mutableStateOf<Int?>(null) }
+    var showCredentialPicker by remember { mutableStateOf(false) }
+    
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -78,44 +82,66 @@ fun CredentialSharingScreen(
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 Text(
-                    "Share encrypted credentials with other ZeroKey users using their public keys.",
+                    "Share encrypted credentials using ECIES (Curve25519). Recipients must provide their public key registry ID.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 OutlinedTextField(
-                    value = recipientEmail,
-                    onValueChange = { recipientEmail = it },
-                    label = { Text("Recipient User ID / Email") },
+                    value = recipientId,
+                    onValueChange = { recipientId = it },
+                    label = { Text("Recipient User ID") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     leadingIcon = { Icon(Icons.Default.PersonAdd, null) }
                 )
 
+                Button(
+                    onClick = { showCredentialPicker = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                ) {
+                    val label = viewModel.passwords.find { it.id == selectedCredentialId }?.serviceName ?: "Select Credential to Share"
+                    Text(label)
+                }
+
                 Text(
-                    "Shared Credentials",
+                    "Pending Incoming Shares",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
 
-                // Placeholder for incoming shares
+                // Actual logic for incoming shares would require a new Flow in ViewModel
                 Surface(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            "No shared items yet.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.LockOpen, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f), modifier = Modifier.size(48.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "No pending incoming shares.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
                     }
                 }
 
                 Button(
                     onClick = {
-                        // In a real app, logic to trigger shareCredential from ViewModel
-                        Toast.makeText(context, "Search for recipient public key...", Toast.LENGTH_SHORT).show()
+                        val senderId = "current_user_id" // In a real app, get from Auth
+                        selectedCredentialId?.let { id ->
+                            viewModel.shareCredential(senderId, recipientId, id)
+                            Toast.makeText(context, "Secure share initialized", Toast.LENGTH_SHORT).show()
+                            recipientId = ""
+                            selectedCredentialId = null
+                        }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -126,7 +152,7 @@ fun CredentialSharingScreen(
                         containerColor = MaterialTheme.colorScheme.onSurface,
                         contentColor = MaterialTheme.colorScheme.surface
                     ),
-                    enabled = recipientEmail.isNotBlank()
+                    enabled = recipientId.isNotBlank() && selectedCredentialId != null
                 ) {
                     Icon(Icons.Default.Share, null)
                     Spacer(Modifier.width(8.dp))
@@ -134,5 +160,30 @@ fun CredentialSharingScreen(
                 }
             }
         }
+    }
+
+    if (showCredentialPicker) {
+        AlertDialog(
+            onDismissRequest = { showCredentialPicker = false },
+            title = { Text("Select Credential") },
+            text = {
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                    items(viewModel.passwords) { item ->
+                        TextButton(
+                            onClick = {
+                                selectedCredentialId = item.id
+                                showCredentialPicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(item.serviceName, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCredentialPicker = false }) { Text("Cancel") }
+            }
+        )
     }
 }

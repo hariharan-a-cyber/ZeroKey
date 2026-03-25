@@ -18,3 +18,13 @@ dependencyResolutionManagement {
 
 rootProject.name = "zerokey"
 include(":app")
+include(":core:crypto")
+include(":core:security")
+include(":core:database")
+include(":core:common")
+include(":data")
+include(":domain")
+include(":feature:vault")
+include(":feature:autofill")
+include(":feature:securitydashboard")
+include(":feature:settings")

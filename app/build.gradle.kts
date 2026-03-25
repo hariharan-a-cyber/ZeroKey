@@ -5,7 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.ksp)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.google.services)
-    alias(libs.plugins.androidx.room)
+    // alias(libs.plugins.androidx.room) // Temporarily disabled due to space in path issue
 }
 
 android {
@@ -20,6 +20,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // Manual Room schema configuration to handle spaces in path
+        ksp {
+            arg("room.schemaLocation", "$projectDir/schemas")
+        }
     }
 
     buildTypes {
@@ -43,11 +48,23 @@ android {
     }
 }
 
-room {
-    schemaDirectory("$projectDir/schemas")
-}
+// room {
+//    schemaDirectory("schemas")
+// }
 
 dependencies {
+    // Modular Dependencies
+    implementation(project(":domain"))
+    implementation(project(":data"))
+    implementation(project(":core:crypto"))
+    implementation(project(":core:security"))
+    implementation(project(":core:common"))
+    implementation(project(":core:database"))
+    implementation(project(":feature:vault"))
+    implementation(project(":feature:autofill"))
+    implementation(project(":feature:securitydashboard"))
+    implementation(project(":feature:settings"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -73,6 +90,12 @@ dependencies {
     // Ktor for Breach Monitoring
     implementation("io.ktor:ktor-client-android:3.0.1")
     implementation("io.ktor:ktor-client-logging:3.0.1")
+    
+    // Argon2 for Secure Key Derivation
+    implementation(libs.argon2kt)
+
+    // Tink for ECC (Curve25519) and Hybrid Encryption
+    implementation(libs.tink.android)
     
     // Firebase
     implementation(platform(libs.firebase.bom))

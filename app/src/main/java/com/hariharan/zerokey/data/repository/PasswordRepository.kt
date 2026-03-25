@@ -6,17 +6,20 @@ import com.hariharan.zerokey.data.database.PasswordEntity
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.security.EncryptedData
 import com.hariharan.zerokey.security.EncryptionManager
+import com.hariharan.zerokey.security.MasterPasswordManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
  * Phase 2: Vault Storage System.
  * Sole cleartext gateway. Handles all encryption/decryption before DB access.
+ * Refactored to use Envelope Encryption and Associated Authenticated Data (AAD).
+ * Performance: Uses Lazy Decryption via PasswordItem.
  */
 class PasswordRepository(private val passwordDao: PasswordDao) {
 
     suspend fun getPasswords(): List<PasswordItem> = withContext(Dispatchers.IO) {
-        passwordDao.getAllPasswords().map { decryptEntity(it) }
+        passwordDao.getAllPasswords().map { PasswordItem(id = it.id, encryptedEntity = it, isFavorite = it.isFavorite) }
     }
 
     suspend fun getAllEntities(): List<PasswordEntity> = withContext(Dispatchers.IO) {
@@ -32,26 +35,39 @@ class PasswordRepository(private val passwordDao: PasswordDao) {
     }
 
     suspend fun getPasswordById(id: Int): PasswordItem? = withContext(Dispatchers.IO) {
-        passwordDao.getPasswordById(id)?.let { decryptEntity(it) }
+        passwordDao.getPasswordById(id)?.let { PasswordItem(id = it.id, encryptedEntity = it, isFavorite = it.isFavorite) }
     }
 
     suspend fun updateFavorite(id: Int, isFavorite: Boolean) = withContext(Dispatchers.IO) {
         passwordDao.updateFavorite(id, isFavorite)
     }
 
-    suspend fun savePassword(service: String, username: String, password: String, notes: String? = null) = withContext(Dispatchers.IO) {
-        val item = PasswordItem(0, service, username, password, notes)
-        passwordDao.insertPassword(encryptItem(item))
+    suspend fun syncWithRemote(remoteEntities: List<PasswordEntity>) = withContext(Dispatchers.IO) {
+        // Implement record-level synchronization
+        val localEntities = passwordDao.getAllPasswords().associateBy { it.id }
+        
+        remoteEntities.forEach { remote ->
+            val local = localEntities[remote.id]
+            if (local == null || remote.lastModified > local.lastModified) {
+                passwordDao.insertPassword(remote)
+            }
+        }
     }
 
-    private fun encryptItem(item: PasswordItem): PasswordEntity {
-        val serviceNameEnc = EncryptionManager.encrypt(item.serviceName.toByteArray())
-        val usernameEnc = EncryptionManager.encrypt(item.username.toByteArray())
-        val passwordEnc = EncryptionManager.encrypt(item.password.toByteArray())
-        val notesEnc = item.notes?.let { EncryptionManager.encrypt(it.toByteArray()) }
+    suspend fun savePassword(service: String, username: String, password: String, notes: String? = null) = withContext(Dispatchers.IO) {
+        val vaultKey = MasterPasswordManager.getVaultKey() 
+            ?: throw IllegalStateException("Vault must be unlocked before saving passwords")
 
-        return PasswordEntity(
-            id = item.id,
+        val createdAt = System.currentTimeMillis()
+        val aad = "timestamp:$createdAt".toByteArray()
+
+        val serviceNameEnc = EncryptionManager.encryptWithKey(service.toByteArray(), vaultKey, aad)
+        val usernameEnc = EncryptionManager.encryptWithKey(username.toByteArray(), vaultKey, aad)
+        val passwordEnc = EncryptionManager.encryptWithKey(password.toByteArray(), vaultKey, aad)
+        val notesEnc = notes?.let { EncryptionManager.encryptWithKey(it.toByteArray(), vaultKey, aad) }
+
+        val entity = PasswordEntity(
+            id = 0,
             encryptedServiceName = Base64.encodeToString(serviceNameEnc.cipherText, Base64.NO_WRAP),
             serviceNameIv = Base64.encodeToString(serviceNameEnc.iv, Base64.NO_WRAP),
             encryptedUsername = Base64.encodeToString(usernameEnc.cipherText, Base64.NO_WRAP),
@@ -60,37 +76,10 @@ class PasswordRepository(private val passwordDao: PasswordDao) {
             passwordIv = Base64.encodeToString(passwordEnc.iv, Base64.NO_WRAP),
             encryptedNotes = notesEnc?.let { Base64.encodeToString(it.cipherText, Base64.NO_WRAP) },
             notesIv = notesEnc?.let { Base64.encodeToString(it.iv, Base64.NO_WRAP) },
-            isFavorite = item.isFavorite,
+            isFavorite = false,
+            createdAt = createdAt,
             lastModified = System.currentTimeMillis()
         )
-    }
-
-    private fun decryptEntity(entity: PasswordEntity): PasswordItem {
-        val serviceName = EncryptionManager.decrypt(
-            EncryptedData(Base64.decode(entity.encryptedServiceName, Base64.NO_WRAP), Base64.decode(entity.serviceNameIv, Base64.NO_WRAP))
-        ).decodeToString()
-
-        val username = EncryptionManager.decrypt(
-            EncryptedData(Base64.decode(entity.encryptedUsername, Base64.NO_WRAP), Base64.decode(entity.usernameIv, Base64.NO_WRAP))
-        ).decodeToString()
-
-        val password = EncryptionManager.decrypt(
-            EncryptedData(Base64.decode(entity.encryptedPassword, Base64.NO_WRAP), Base64.decode(entity.passwordIv, Base64.NO_WRAP))
-        ).decodeToString()
-
-        val notes = entity.encryptedNotes?.let {
-            EncryptionManager.decrypt(
-                EncryptedData(Base64.decode(it, Base64.NO_WRAP), Base64.decode(entity.notesIv!!, Base64.NO_WRAP))
-            ).decodeToString()
-        }
-
-        return PasswordItem(
-            id = entity.id,
-            serviceName = serviceName,
-            username = username,
-            password = password,
-            notes = notes,
-            isFavorite = entity.isFavorite
-        )
+        passwordDao.insertPassword(entity)
     }
 }

@@ -29,20 +29,18 @@ object PasswordHealthAnalyzer {
 
         // Consider passwords older than 6 months as 'old'
         val sixMonthsAgo = System.currentTimeMillis() - 15552000000L
-        val old = passwords.filter { 
-            // In our simple model, we don't have createdAt in PasswordItem yet
-            // but we can add it or mock it for now
-            false 
+        val old = passwords.filter { item ->
+            item.createdAt < sixMonthsAgo
         }
         
         // Query BreachMonitor for each password
         val compromised = passwords.filter { item ->
-            BreachMonitor.checkBreach(item.password)
+            BreachMonitor.checkBreach(item.password.toCharArray())
         }
 
         // Calculate score
         val total = passwords.size
-        val penalty = (weak.size * 5) + (duplicates.size * 10) + (compromised.size * 25)
+        val penalty = (weak.size * 5) + (duplicates.size * 10) + (compromised.size * 25) + (old.size * 2)
         val score = (100 - (penalty / total.coerceAtLeast(1))).coerceIn(0, 100)
 
         return HealthReport(

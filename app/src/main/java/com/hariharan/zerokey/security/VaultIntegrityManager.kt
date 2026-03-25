@@ -1,5 +1,6 @@
 package com.hariharan.zerokey.security
 
+import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.SecretKey
 
@@ -20,11 +21,11 @@ object VaultIntegrityManager {
     }
 
     /**
-     * Verifies the HMAC signature for the given data.
+     * Verifies the HMAC signature for the given data using constant-time comparison.
      * @return True if the signature is valid, false otherwise.
      */
     fun verify(data: ByteArray, signature: ByteArray, key: SecretKey): Boolean {
         val expectedSignature = sign(data, key)
-        return signature.contentEquals(expectedSignature)
+        return MessageDigest.isEqual(signature, expectedSignature)
     }
 }

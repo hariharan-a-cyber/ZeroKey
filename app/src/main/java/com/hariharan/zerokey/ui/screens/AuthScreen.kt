@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.security.FirebaseAuthenticator
+import com.hariharan.zerokey.security.MasterPasswordManager
 import kotlinx.coroutines.launch
 
 @Composable
@@ -105,7 +106,7 @@ fun AuthScreen(
             TransparentTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = "Password",
+                label = "Master Password",
                 leadingIcon = Icons.Default.Lock,
                 keyboardType = KeyboardType.Password,
                 isPassword = true,
@@ -142,7 +143,17 @@ fun AuthScreen(
                         }
                         
                         if (user != null) {
-                            onAuthSuccess()
+                            try {
+                                // Initialize the Vault session with the Master Password
+                                if (!MasterPasswordManager.isSetup(context)) {
+                                    MasterPasswordManager.setupVault(context, password.toCharArray())
+                                } else {
+                                    MasterPasswordManager.unlockVault(context, password.toCharArray())
+                                }
+                                onAuthSuccess()
+                            } catch (e: Exception) {
+                                errorMessage = "Vault unlock failed: ${e.message}"
+                            }
                         } else {
                             errorMessage = if (isLogin) "Invalid credentials" else "Signup failed"
                         }

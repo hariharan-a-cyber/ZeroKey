@@ -6,8 +6,18 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [PasswordEntity::class, VaultMetadata::class, AuditLogEntity::class],
-    version = 3,
+    entities = [
+        PasswordEntity::class, 
+        VaultMetadata::class, 
+        AuditLogEntity::class,
+        PasskeyEntity::class,
+        SecurityEventEntity::class,
+        SharedCredentialEntity::class,
+        EmergencyAccessEntity::class,
+        SyncMetadataEntity::class,
+        SecurityScoreHistoryEntity::class
+    ],
+    version = 4,
     exportSchema = false
 )
 abstract class PasswordDatabase : RoomDatabase() {

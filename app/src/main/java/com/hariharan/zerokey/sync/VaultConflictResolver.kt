@@ -42,8 +42,8 @@ class VaultConflictResolver(
             }
             local.timestamp > remote.timestamp -> {
                 Log.i(TAG, "Local wins (newer by ${local.timestamp - remote.timestamp}ms)")
-                // Return local — caller will re-push
-                PullResult.Conflict(resolvedVault = "__LOCAL_WINS__")
+                // Re-push local to remote
+                acceptRemote(local, encryptionKey, hmacKey)
             }
             timeDiff <= MERGE_WINDOW_MS -> {
                 Log.i(TAG, "Timestamps tied — attempting field-level merge")

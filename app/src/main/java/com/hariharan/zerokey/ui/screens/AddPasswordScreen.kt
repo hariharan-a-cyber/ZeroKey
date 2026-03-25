@@ -1,5 +1,6 @@
 package com.hariharan.zerokey.ui.screens
 
+import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -16,7 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,6 +39,9 @@ fun AddPasswordScreen(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf(initialPassword) }
     var notes by remember { mutableStateOf("") }
+    
+    val context = LocalContext.current
+    var isSaving by remember { mutableStateOf(false) }
 
     // Sync state if initialPassword changes (e.g. returning from generator)
     LaunchedEffect(initialPassword) {
@@ -95,9 +101,10 @@ fun AddPasswordScreen(
             ) {
                 AddTransparentTextField(
                     value = serviceName,
-                    onValueChange = { serviceName = it },
+                    onValueChange = { serviceName = it.uppercase() },
                     label = "Service Name",
-                    placeholder = "e.g. Google, GitHub"
+                    placeholder = "E.G. GOOGLE, GITHUB",
+                    capitalization = KeyboardCapitalization.Characters
                 )
 
                 AddTransparentTextField(
@@ -152,8 +159,21 @@ fun AddPasswordScreen(
                 Button(
                     onClick = {
                         if (serviceName.isNotBlank() && password.isNotBlank()) {
-                            viewModel.addPassword(serviceName, username, password, notes)
-                            onBack()
+                            isSaving = true
+                            viewModel.addPassword(
+                                service = serviceName, 
+                                username = username, 
+                                password = password, 
+                                notes = notes,
+                                onComplete = { 
+                                    isSaving = false
+                                    onBack() 
+                                },
+                                onError = { error ->
+                                    isSaving = false
+                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                }
+                            )
                         }
                     },
                     modifier = Modifier
@@ -164,9 +184,17 @@ fun AddPasswordScreen(
                         containerColor = MaterialTheme.colorScheme.onSurface,
                         contentColor = MaterialTheme.colorScheme.surface
                     ),
-                    enabled = serviceName.isNotBlank() && password.isNotBlank()
+                    enabled = serviceName.isNotBlank() && password.isNotBlank() && !isSaving
                 ) {
-                    Text("Securely Save", fontWeight = FontWeight.Bold)
+                    if (isSaving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Securely Save", fontWeight = FontWeight.Bold)
+                    }
                 }
                 
                 Spacer(modifier = Modifier.height(32.dp))
@@ -182,6 +210,7 @@ fun AddTransparentTextField(
     label: String,
     placeholder: String = "",
     keyboardType: KeyboardType = KeyboardType.Text,
+    capitalization: KeyboardCapitalization = KeyboardCapitalization.None,
     singleLine: Boolean = true,
     trailingIcon: @Composable (() -> Unit)? = null
 ) {
@@ -199,7 +228,10 @@ fun AddTransparentTextField(
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = trailingIcon,
             singleLine = singleLine,
-            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = keyboardType,
+                capitalization = capitalization
+            ),
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = Color.Transparent,
                 unfocusedContainerColor = Color.Transparent,

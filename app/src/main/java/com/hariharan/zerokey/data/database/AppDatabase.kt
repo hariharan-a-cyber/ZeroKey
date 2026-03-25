@@ -6,7 +6,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [PasswordEntity::class],
+    entities = [
+        PasswordEntity::class,
+        PasskeyEntity::class,
+        SecurityEventEntity::class,
+        SharedCredentialEntity::class,
+        EmergencyAccessEntity::class,
+        SyncMetadataEntity::class
+    ],
     version = 1,
     exportSchema = false
 )

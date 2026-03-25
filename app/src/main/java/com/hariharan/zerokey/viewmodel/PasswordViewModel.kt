@@ -1,12 +1,15 @@
 package com.hariharan.zerokey.viewmodel
 
 import android.content.Context
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.runtime.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hariharan.zerokey.analytics.SecurityRecommendationEngine
 import com.hariharan.zerokey.data.backup.VaultBackupManager
 import com.hariharan.zerokey.data.database.AuditLogEntity
+import com.hariharan.zerokey.data.database.PasswordEntity
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.data.repository.PasswordRepository
 import com.hariharan.zerokey.security.*
@@ -20,7 +23,11 @@ import com.hariharan.zerokey.emergency.EmergencyAccessManager
 import com.hariharan.zerokey.utils.PasswordHealthAnalyzer
 import com.hariharan.zerokey.utils.PasswordStrength
 import com.hariharan.zerokey.utils.PasswordUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import java.io.File
 import javax.crypto.spec.SecretKeySpec
 
@@ -67,24 +74,60 @@ class PasswordViewModel(
         private set
 
     init {
-        loadPasswords()
-        loadAuditLogs()
-        refreshSecurityInsights()
+        // Initial minimal load
+        loadInitialData()
+    }
+
+    private fun loadInitialData() {
+        viewModelScope.launch {
+            // Load passwords first as they are critical for the main screen
+            allPasswords = repository.getPasswords()
+            filterPasswords()
+            
+            // Defer heavy calculations until after initial UI is ready
+            launch(Dispatchers.Default) {
+                healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
+                refreshSecurityInsights()
+                
+                // Defer security report as it's the heaviest and used in sub-screens
+                updateSecurityReport()
+            }
+            
+            // Load logs in background as they are for a separate screen
+            launch {
+                auditLogs.clear()
+                auditLogs.addAll(auditLogManager.getLogs())
+            }
+        }
+    }
+
+    private suspend fun updateSecurityReport() {
+        val vaultKey = MasterPasswordManager.getVaultKey()
+        if (vaultKey != null) {
+            val report = withContext(Dispatchers.Default) {
+                securityAnalyzer.buildReport(allPasswords, vaultKey.encoded)
+            }
+            withContext(Dispatchers.Main) {
+                securityReport = report
+            }
+        } else {
+            withContext(Dispatchers.Main) {
+                securityReport = VaultSecurityReport(0, emptyList(), emptyList(), emptyList(), emptyList())
+            }
+        }
     }
 
     fun loadPasswords() {
         viewModelScope.launch {
             allPasswords = repository.getPasswords()
             filterPasswords()
-            healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
             
-            // Comprehensive Security Analysis
-            val masterKey = MasterPasswordManager.getSessionKey()
-            if (masterKey != null) {
-                securityReport = securityAnalyzer.buildReport(allPasswords, masterKey.encoded)
+            // Trigger deferred updates
+            launch(Dispatchers.Default) {
+                healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
+                refreshSecurityInsights()
+                updateSecurityReport()
             }
-            
-            refreshSecurityInsights()
         }
     }
 
@@ -92,33 +135,46 @@ class PasswordViewModel(
         viewModelScope.launch {
             auditLogs.clear()
             auditLogs.addAll(auditLogManager.getLogs())
-            refreshSecurityInsights()
         }
     }
 
     fun refreshSecurityInsights() {
         viewModelScope.launch {
-            recommendations.clear()
-            recommendations.addAll(SecurityRecommendationEngine.getRecommendations(healthReport))
+            val newRecommendations = SecurityRecommendationEngine.getRecommendations(healthReport)
+            val newAlerts = securityEventManager.detectAnomalies()
             
-            securityAlerts.clear()
-            securityAlerts.addAll(securityEventManager.detectAnomalies())
+            withContext(Dispatchers.Main) {
+                recommendations.clear()
+                recommendations.addAll(newRecommendations)
+                securityAlerts.clear()
+                securityAlerts.addAll(newAlerts)
+            }
         }
     }
 
-    fun toggleOfflineMode(enabled: Boolean) {
+    fun toggleOfflineMode(context: Context, enabled: Boolean) {
         privacyModeManager?.setOfflineOnly(enabled)
         isOfflineMode = enabled
+        
+        val message = if (enabled) {
+            "Stealth Protocol Activated: Vault is now air-gapped from all networks."
+        } else {
+            "Stealth Protocol Deactivated: Cloud features restored."
+        }
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
 
     fun syncVault(userId: String) {
         if (isOfflineMode || syncManager == null) return
         
         viewModelScope.launch {
-            val masterKey = MasterPasswordManager.getSessionKey()
-            if (masterKey != null) {
-                // In a real implementation, we would handle JSON serialization of all entities
-                // syncManager.pushVault(userId, vaultJson, masterKey.encoded, masterKey.encoded)
+            val vaultKey = MasterPasswordManager.getVaultKey()
+            val hmacKey = vaultKey?.encoded ?: return@launch // Proper HMAC derivation needed in production
+            
+            if (vaultKey != null) {
+                val entities = repository.getAllEntities()
+                val vaultJson = Json.encodeToString(ListSerializer(PasswordEntity.serializer()), entities)
+                syncManager.pushVaultSnapshot(userId, vaultJson, vaultKey.encoded, hmacKey)
             }
         }
     }
@@ -141,12 +197,44 @@ class PasswordViewModel(
         }
     }
 
-    fun addPassword(service: String, username: String, password: String, notes: String? = null) {
+    fun addPassword(
+        service: String, 
+        username: String, 
+        password: String, 
+        notes: String? = null, 
+        onComplete: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
         viewModelScope.launch {
-            repository.savePassword(service, username, password, notes)
-            auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Added new password for $service")
-            loadPasswords()
-            loadAuditLogs()
+            try {
+                repository.savePassword(service, username, password, notes)
+                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Added new password for $service")
+                
+                // Immediately update the password list and insights
+                allPasswords = repository.getPasswords()
+                filterPasswords()
+                
+                // Update background reports
+                launch(Dispatchers.Default) {
+                    healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
+                    refreshSecurityInsights()
+                    updateSecurityReport()
+                }
+
+                withContext(Dispatchers.Main) {
+                    onComplete()
+                }
+            } catch (e: IllegalStateException) {
+                Log.e("PasswordViewModel", "Vault locked", e)
+                withContext(Dispatchers.Main) {
+                    onError("Vault is locked. Please re-authenticate.")
+                }
+            } catch (e: Exception) {
+                Log.e("PasswordViewModel", "Failed to add password", e)
+                withContext(Dispatchers.Main) {
+                    onError("Failed to save password: ${e.message}")
+                }
+            }
         }
     }
 
@@ -186,12 +274,12 @@ class PasswordViewModel(
 
     fun exportVault(context: Context, file: File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
-            val masterKey = MasterPasswordManager.getSessionKey()
+            val vaultKey = MasterPasswordManager.getVaultKey()
             val salt = MasterPasswordManager.getSalt(context)?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) }
             
-            if (masterKey != null && salt != null && backupManager != null) {
+            if (vaultKey != null && salt != null && backupManager != null) {
                 try {
-                    backupManager.exportBackup(file, masterKey, masterKey, salt)
+                    backupManager.exportBackup(file, vaultKey, vaultKey, salt)
                     auditLogManager.log(AuditLogManager.EventType.VAULT_EXPORTED, "Vault exported to ${file.name}")
                     onComplete(true)
                 } catch (e: Exception) {
@@ -205,10 +293,10 @@ class PasswordViewModel(
 
     fun importVault(file: File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
-            val masterKey = MasterPasswordManager.getSessionKey()
-            if (masterKey != null && backupManager != null) {
+            val vaultKey = MasterPasswordManager.getVaultKey()
+            if (vaultKey != null && backupManager != null) {
                 try {
-                    backupManager.importBackup(file, masterKey, masterKey)
+                    backupManager.importBackup(file, vaultKey, vaultKey)
                     auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Vault imported from ${file.name}")
                     loadPasswords()
                     loadAuditLogs()
@@ -219,6 +307,18 @@ class PasswordViewModel(
             } else {
                 onComplete(false)
             }
+        }
+    }
+
+    fun shareCredential(senderId: String, recipientId: String, credentialId: Int) {
+        viewModelScope.launch {
+            val item = allPasswords.find { it.id == credentialId } ?: return@launch
+            val vaultKey = MasterPasswordManager.getVaultKey() ?: return@launch
+            val hmacKey = vaultKey.encoded // Simplified
+            
+            val payload = Json.encodeToString(PasswordItem.serializer(), item)
+            shareManager?.shareCredential(senderId, recipientId, payload, hmacKey)
+            auditLogManager.log(AuditLogManager.EventType.PASSWORD_VIEWED, "Shared credential ${item.serviceName} with $recipientId")
         }
     }
 }

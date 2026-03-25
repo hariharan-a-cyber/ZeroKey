@@ -29,7 +29,8 @@ import com.hariharan.zerokey.viewmodel.PasswordViewModel
 @Composable
 fun SecurityDashboardScreen(
     viewModel: PasswordViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onFixCredential: (Int) -> Unit = {}
 ) {
     val report = viewModel.securityReport
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -76,14 +77,14 @@ fun SecurityDashboardScreen(
                     CircularProgressIndicator()
                 }
             } else {
-                DashboardContent(report, Modifier.fillMaxSize())
+                DashboardContent(report, Modifier.fillMaxSize(), onFixCredential)
             }
         }
     }
 }
 
 @Composable
-private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier) {
+private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier, onFixCredential: (Int) -> Unit) {
     val score = report.securityScore
     val grade = when {
         score >= 90 -> SecurityGrade.EXCELLENT
@@ -132,21 +133,21 @@ private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier) {
         if (report.breachedCredentials.isNotEmpty()) {
             item { SectionHeader("Breach Alerts", Icons.Default.GppBad, Color(0xFFE74C3C)) }
             items(report.breachedCredentials) { item ->
-                BreachAlertCard(item)
+                BreachAlertCard(item, onFixCredential)
             }
         }
 
         if (report.weakPasswords.isNotEmpty()) {
             item { SectionHeader("Weak Passwords", Icons.Default.Warning, Color(0xFFF39C12)) }
             items(report.weakPasswords) { item ->
-                WeakPasswordCard(item)
+                WeakPasswordCard(item, onFixCredential)
             }
         }
 
         if (report.duplicateGroups.isNotEmpty()) {
             item { SectionHeader("Reused Passwords", Icons.Default.ContentCopy, Color(0xFFE67E22)) }
             items(report.duplicateGroups) { group ->
-                DuplicateGroupCard(group)
+                DuplicateGroupCard(group, onFixCredential)
             }
         }
     }
@@ -274,7 +275,7 @@ private fun SectionHeader(
 }
 
 @Composable
-private fun BreachAlertCard(item: BreachedItem) {
+private fun BreachAlertCard(item: BreachedItem, onFix: (Int) -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -301,13 +302,13 @@ private fun BreachAlertCard(item: BreachedItem) {
                 )
             }
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = {}) { Text("Fix", color = Color(0xFFE74C3C)) }
+            TextButton(onClick = { onFix(item.credentialId) }) { Text("Fix", color = Color(0xFFE74C3C)) }
         }
     }
 }
 
 @Composable
-private fun WeakPasswordCard(item: WeakPasswordItem) {
+private fun WeakPasswordCard(item: WeakPasswordItem, onFix: (Int) -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -324,13 +325,13 @@ private fun WeakPasswordCard(item: WeakPasswordItem) {
                 Text(item.domain, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 Text(item.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            TextButton(onClick = {}) { Text("Change") }
+            TextButton(onClick = { onFix(item.credentialId) }) { Text("Change") }
         }
     }
 }
 
 @Composable
-private fun DuplicateGroupCard(group: DuplicateGroup) {
+private fun DuplicateGroupCard(group: DuplicateGroup, onFix: (Int) -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -348,12 +349,27 @@ private fun DuplicateGroupCard(group: DuplicateGroup) {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            group.domains.take(3).forEach { domain ->
-                Text(
-                    "• $domain",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(start = 8.dp)
-                )
+            group.domains.forEachIndexed { index, domain ->
+                if (index < 3) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "• $domain",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                        TextButton(
+                            onClick = { onFix(group.credentialIds[index]) },
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.height(24.dp)
+                        ) {
+                            Text("Fix", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
             }
             if (group.domains.size > 3) {
                 Text(

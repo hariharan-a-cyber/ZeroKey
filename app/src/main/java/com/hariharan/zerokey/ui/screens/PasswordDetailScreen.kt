@@ -84,8 +84,9 @@ fun PasswordDetailScreen(
                 }
             }
 
-            if (!item.notes.isNullOrBlank()) {
-                DetailField(label = "Notes", value = item.notes)
+            val notes = item.notes
+            if (!notes.isNullOrBlank()) {
+                DetailField(label = "Notes", value = notes)
             }
         }
     }

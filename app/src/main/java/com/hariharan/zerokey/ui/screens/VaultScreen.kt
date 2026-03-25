@@ -41,7 +41,8 @@ fun VaultScreen(
     onSecurityActivityClick: () -> Unit = {},
     onPasswordHealthClick: () -> Unit = {},
     onSecurityDashboardClick: () -> Unit = {},
-    onSharingClick: () -> Unit = {}
+    onSharingClick: () -> Unit = {},
+    onSyncClick: () -> Unit = {}
 ) {
     val passwords = viewModel.passwords
     val searchQuery = viewModel.searchQuery
@@ -164,6 +165,14 @@ fun VaultScreen(
                             modifier = Modifier.background(MaterialTheme.colorScheme.surface)
                         ) {
                             DropdownMenuItem(
+                                text = { Text("Cloud Sync") },
+                                leadingIcon = { Icon(Icons.Default.CloudSync, null) },
+                                onClick = {
+                                    showMenu = false
+                                    onSyncClick()
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Security Dashboard") },
                                 leadingIcon = { Icon(Icons.Default.Shield, null) },
                                 onClick = {
@@ -195,7 +204,7 @@ fun VaultScreen(
                                         Spacer(Modifier.width(8.dp))
                                         Switch(
                                             checked = viewModel.isOfflineMode,
-                                            onCheckedChange = { viewModel.toggleOfflineMode(it) },
+                                            onCheckedChange = { viewModel.toggleOfflineMode(context, it) },
                                             modifier = Modifier.scale(0.7f)
                                         )
                                     }

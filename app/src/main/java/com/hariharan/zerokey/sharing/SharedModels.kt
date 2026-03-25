@@ -7,7 +7,7 @@ data class SharedCredential(
     val senderUserId: String,
     val recipientUserId: String,
     val encryptedPayload: String, // AES-GCM encrypted credential data
-    val encryptedSessionKey: String, // RSA-OAEP encrypted AES key
+    val ephemeralPublicKey: String, // Base64 encoded X25519 ephemeral public key
     val iv: String,
     val hmac: String,
     val timestamp: Long = System.currentTimeMillis()
@@ -15,6 +15,6 @@ data class SharedCredential(
 
 data class UserPublicKey(
     val userId: String,
-    val publicKey: String, // Base64 encoded RSA public key
+    val publicKey: String, // Base64 encoded X25519 public key
     val deviceId: String
 )
