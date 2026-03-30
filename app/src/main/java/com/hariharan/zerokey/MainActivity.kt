@@ -74,11 +74,17 @@ class MainActivity : FragmentActivity() {
         clearClipboard()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        clearClipboard()
+    }
+
     private fun clearClipboard() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         if (clipboard.hasPrimaryClip()) {
             val description = clipboard.primaryClipDescription
-            if (description?.label == "password" || description?.label == "generated_password") {
+            val label = description?.label?.toString() ?: ""
+            if (label == "password" || label == "generated_password" || label == "zerokey_password" || label.contains("password", ignoreCase = true)) {
                 val clip = ClipData.newPlainText("", "")
                 clipboard.setPrimaryClip(clip)
             }
@@ -141,16 +147,14 @@ class MainActivity : FragmentActivity() {
                 if (event == Lifecycle.Event.ON_STOP) {
                     // Lock the UI when app goes to background
                     isLocked = true
-                    // Note: We don't call MasterPasswordManager.lockVault() here because
-                    // biometric re-auth in this app currently doesn't re-derive the master key.
-                    // Keeping the key in memory while protecting the UI with biometrics.
                 }
             }
             lifecycleOwner.lifecycle.addObserver(observer)
             onDispose {
                 lifecycleOwner.lifecycle.removeObserver(observer)
-                // Truly clear sensitive data when the composable is disposed
-                MasterPasswordManager.lockVault()
+                // Note: We no longer call MasterPasswordManager.lockVault() here because
+                // it causes session loss during configuration changes (like rotation).
+                // The session will be cleared when the process is killed or via explicit logout.
             }
         }
 

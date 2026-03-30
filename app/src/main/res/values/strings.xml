@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">zerokey</string>
+    <string name="app_name">ZeroKey</string>
+    <string name="default_web_client_id">1034703214734-dc9qa6ohcb2l2lvl11ict77q4k39q728.apps.googleusercontent.com</string>
 </resources>

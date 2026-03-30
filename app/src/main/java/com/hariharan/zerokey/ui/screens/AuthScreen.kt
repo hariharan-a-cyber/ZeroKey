@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hariharan.zerokey.R
 import com.hariharan.zerokey.security.FirebaseAuthenticator
 import com.hariharan.zerokey.security.MasterPasswordManager
 import kotlinx.coroutines.launch
@@ -193,7 +194,8 @@ fun AuthScreen(
                     scope.launch {
                         isLoading = true
                         errorMessage = null
-                        val user = authenticator.signInWithGoogle(context, "1034703214734-dc9qa6ohcb2l2lvl11ict77q4k39q728.apps.googleusercontent.com")
+                        val clientId = context.getString(R.string.default_web_client_id)
+                        val user = authenticator.signInWithGoogle(context, clientId)
                         if (user != null) {
                             onAuthSuccess()
                         } else {

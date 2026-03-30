@@ -191,30 +191,27 @@ class PasswordViewModel(
         } else {
             val filtered = allPasswords.filter {
                 it.serviceName.contains(searchQuery, ignoreCase = true) ||
-                it.username.contains(searchQuery, ignoreCase = true)
+                        it.username.contains(searchQuery, ignoreCase = true)
             }
             passwords.addAll(filtered)
         }
     }
-
     fun addPassword(
-        service: String, 
-        username: String, 
-        password: String, 
-        notes: String? = null, 
+        service: String,
+        username: String,
+        password: String,
+        notes: String? = null,
         onComplete: () -> Unit = {},
-        onError: (String) -> Unit = {}
+        onError: (String) -> Unit = {}   // ← new parameter
     ) {
         viewModelScope.launch {
             try {
                 repository.savePassword(service, username, password, notes)
                 auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Added new password for $service")
-                
-                // Immediately update the password list and insights
+
                 allPasswords = repository.getPasswords()
                 filterPasswords()
-                
-                // Update background reports
+
                 launch(Dispatchers.Default) {
                     healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
                     refreshSecurityInsights()
@@ -225,14 +222,15 @@ class PasswordViewModel(
                     onComplete()
                 }
             } catch (e: IllegalStateException) {
-                Log.e("PasswordViewModel", "Vault locked", e)
+                // Vault is locked — getVaultKey() returned null
+                Log.e("PasswordViewModel", "Vault is locked, cannot save", e)
                 withContext(Dispatchers.Main) {
-                    onError("Vault is locked. Please re-authenticate.")
+                    onError("Session expired. Please lock and unlock the app again.")
                 }
             } catch (e: Exception) {
                 Log.e("PasswordViewModel", "Failed to add password", e)
                 withContext(Dispatchers.Main) {
-                    onError("Failed to save password: ${e.message}")
+                    onError("Failed to save. Please try again.")
                 }
             }
         }

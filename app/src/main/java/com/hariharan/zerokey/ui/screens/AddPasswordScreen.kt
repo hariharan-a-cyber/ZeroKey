@@ -35,12 +35,11 @@ fun AddPasswordScreen(
     onBack: () -> Unit,
     onGenerateClick: () -> Unit
 ) {
+    val context = LocalContext.current
     var serviceName by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf(initialPassword) }
     var notes by remember { mutableStateOf("") }
-    
-    val context = LocalContext.current
     var isSaving by remember { mutableStateOf(false) }
 
     // Sync state if initialPassword changes (e.g. returning from generator)
@@ -161,7 +160,7 @@ fun AddPasswordScreen(
                         if (serviceName.isNotBlank() && password.isNotBlank()) {
                             isSaving = true
                             viewModel.addPassword(
-                                service = serviceName, 
+                                service = serviceName,
                                 username = username, 
                                 password = password, 
                                 notes = notes,

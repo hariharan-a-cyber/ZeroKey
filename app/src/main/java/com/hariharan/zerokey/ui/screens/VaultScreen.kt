@@ -471,7 +471,7 @@ fun PasswordItemCard(item: PasswordItem, viewModel: PasswordViewModel) {
 
 private fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("password", text)
+    val clip = ClipData.newPlainText("zerokey_password", text)
     clipboard.setPrimaryClip(clip)
 }
 
