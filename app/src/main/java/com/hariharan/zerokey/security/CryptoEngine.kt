@@ -1,6 +1,5 @@
 package com.hariharan.zerokey.security
 
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -12,12 +11,11 @@ class CryptoEngine {
 
     fun encryptAesGcm(plaintext: ByteArray, key: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(AES_MODE)
-        val iv = ByteArray(IV_LENGTH)
-        SecureRandom().nextBytes(iv)
-        val spec = GCMParameterSpec(AUTH_TAG_LENGTH, iv)
         val secretKey = SecretKeySpec(key, "AES")
         
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey, spec)
+        // Let the provider generate a cryptographically strong random IV
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+        val iv = cipher.iv
         val ciphertext = cipher.doFinal(plaintext)
         
         // Return IV + Ciphertext

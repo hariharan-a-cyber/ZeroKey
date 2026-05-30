@@ -1,6 +1,6 @@
 package com.hariharan.zerokey.security
 
-import android.util.Log
+import com.hariharan.zerokey.core.common.PrivacyLogger
 
 /**
  * DomainVerificationManager
@@ -34,16 +34,17 @@ class DomainVerificationManager(
         webDomain: String?
     ): DomainVerificationResult {
 
-        // 1. Null domain → block
-        if (requestedDomain == null && webDomain == null) {
+        // 1. Domain Extraction & Normalization
+        val domain = webDomain ?: requestedDomain
+        if (domain == null) {
             return DomainVerificationResult.Blocked("No domain information available")
         }
-
-        val domain = requestedDomain ?: webDomain!!
+        
+        val normalizedDomain = extractRegistrableDomain(domain)
 
         // 2. Suspicious pattern check
         if (SUSPICIOUS_PATTERNS.any { it.matches(domain) }) {
-            Log.w(TAG, "Suspicious domain pattern detected: $domain")
+            PrivacyLogger.w(TAG, "Suspicious domain pattern detected: $domain")
             return DomainVerificationResult.Blocked("Suspicious domain pattern: $domain")
         }
 
@@ -51,18 +52,32 @@ class DomainVerificationManager(
         if (packageName != null && webDomain != null) {
             val assetLinksValid = assetLinksVerifier.verify(webDomain, packageName)
             if (!assetLinksValid) {
-                Log.w(TAG, "Digital Asset Links mismatch: $packageName vs $webDomain")
-                return DomainVerificationResult.Blocked(
-                    "Package $packageName is not associated with domain $webDomain via Digital Asset Links"
-                )
+                PrivacyLogger.w(TAG, "Digital Asset Links mismatch: $packageName vs $webDomain")
+                return DomainVerificationResult.Unverified(normalizedDomain)
             }
         }
 
-        return DomainVerificationResult.Verified(domain)
+        return DomainVerificationResult.Verified(normalizedDomain)
+    }
+
+    private fun extractRegistrableDomain(host: String): String {
+        val parts = host.lowercase().split(".")
+        if (parts.size < 2) return host
+        
+        // Basic Public Suffix List heuristic (matches common multi-part TLDs like .co.uk, .com.br)
+        val lastTwo = "${parts[parts.size - 2]}.${parts[parts.size - 1]}"
+        val multiPartTlds = listOf("co.uk", "com.br", "org.uk", "net.uk", "com.au", "co.jp", "ac.uk")
+        
+        return if (multiPartTlds.contains(lastTwo) && parts.size >= 3) {
+            "${parts[parts.size - 3]}.$lastTwo"
+        } else {
+            lastTwo
+        }
     }
 }
 
 sealed class DomainVerificationResult {
     data class Verified(val verifiedDomain: String) : DomainVerificationResult()
+    data class Unverified(val domain: String) : DomainVerificationResult()
     data class Blocked(val reason: String) : DomainVerificationResult()
 }

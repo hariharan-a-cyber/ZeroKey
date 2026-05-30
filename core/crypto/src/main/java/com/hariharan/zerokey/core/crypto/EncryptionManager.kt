@@ -2,7 +2,7 @@ package com.hariharan.zerokey.core.crypto
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Log
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -31,11 +31,11 @@ object EncryptionManager {
         if (!keyStore.containsAlias(KEY_ALIAS)) {
             try {
                 generateAesKey(KEY_ALIAS, useStrongBox = true)
-                Log.i("EncryptionManager", "Root key generated in StrongBox")
+                PrivacyLogger.i("EncryptionManager", "Root key generated in StrongBox")
             } catch (e: Exception) {
-                Log.w("EncryptionManager", "StrongBox unavailable, falling back to TEE: ${e.message}")
+                PrivacyLogger.w("EncryptionManager", "StrongBox unavailable, falling back to TEE: ${e.message}")
                 generateAesKey(KEY_ALIAS, useStrongBox = false)
-                Log.i("EncryptionManager", "Root key generated in TEE")
+                PrivacyLogger.i("EncryptionManager", "Root key generated in TEE")
             }
         }
     }

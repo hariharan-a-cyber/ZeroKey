@@ -16,7 +16,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "zerokey"
+rootProject.name = "ZeroKey"
 include(":app")
 include(":core:crypto")
 include(":core:security")

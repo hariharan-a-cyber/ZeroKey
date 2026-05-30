@@ -1,73 +1,63 @@
-# Built application files
+# ZeroKey Security: Critical Ignores
+# DO NOT REMOVE THESE - They prevent leaking your vault keys and secrets
+*.jks
+*.keystore
+local.properties
+google-services.json
+*.p12
+*.pem
+secrets.xml
+signing.properties
+
+# Android / Gradle Built files
+build/
+.gradle/
 *.apk
 *.ap_
 *.aab
-
-# Files for the ART/Dalvik VM
 *.dex
-
-# Java class files
 *.class
-
-# Generated files
 bin/
 gen/
 out/
-build/
 
-# Gradle files
-.gradle/
-gradle-app.setting
-!gradle-wrapper.jar
-
-# Local configuration file (SDK path etc)
-local.properties
-
-# Proguard
-proguard/
-
-# Log Files
-*.log
-
-# Android Studio
+# IDE - Android Studio / IntelliJ
 .idea/
 *.iml
 *.ipr
 *.iws
-
-# Keystore files
-*.jks
-*.keystore
-
-# External native build folder
+.project
+.settings/
+.classpath
+.factorypath
+captures/
+.navigation/
 .externalNativeBuild/
 .cxx/
 
-# Google Services
-google-services.json
-
-# Navigation auto-generated files
-.navigation/
-
-# Captures (Android Studio screenshots)
-captures/
-
-# OS files
+# OS / Misc
 .DS_Store
 Thumbs.db
-
-# Temporary files
+*.log
 *.tmp
 *.temp
-
-# Kotlin build
 .kotlin/
-
-# Gradle cache
 .gradle-cache/
 
-# Firebase crash logs
-com_crashlytics_export_strings.xml
+# Sensitive data / Local DB (if any exported)
+*.db
+*.sqlite
+vault_export.json
+vault_import.json
+*.db-shm
+*.db-wal
 
-# Android profiling
-*.hprof
+# Local Environment / Secrets
+.env
+.env.*
+!.env.example
+
+# Project Specific
+.artifacts/
+*.bak
+verification-metadata.xml

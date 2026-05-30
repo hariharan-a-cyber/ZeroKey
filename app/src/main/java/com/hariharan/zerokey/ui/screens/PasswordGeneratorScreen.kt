@@ -86,7 +86,9 @@ fun PasswordGeneratorScreen(
             ) {
                 // Password Display Card
                 Surface(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(240.dp), // Increased further to 240dp for absolute stability
                     shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                 ) {
@@ -94,17 +96,26 @@ fun PasswordGeneratorScreen(
                         modifier = Modifier.padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            text = generatedPassword,
-                            style = MaterialTheme.typography.headlineMedium.copy(
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
-                            ),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        
-                        Spacer(modifier = Modifier.height(24.dp))
+                        // Use a fixed-height Box for the text to prevent it from pushing buttons
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = generatedPassword,
+                                style = MaterialTheme.typography.headlineMedium.copy(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
+                                    fontSize = if (generatedPassword.length > 32) 18.sp else 24.sp
+                                ),
+                                color = MaterialTheme.colorScheme.primary,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                         
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -140,8 +151,8 @@ fun PasswordGeneratorScreen(
                             length = it
                             generatedPassword = PasswordUtils.generatePassword(length.toInt(), includeUppercase, includeNumbers, includeSymbols)
                         },
-                        valueRange = 8f..64f,
-                        steps = 56
+                        valueRange = 15f..64f, // Updated Range: 15 to 64
+                        steps = 49 // (64 - 15 = 49 steps)
                     )
 
                     GeneratorToggle(

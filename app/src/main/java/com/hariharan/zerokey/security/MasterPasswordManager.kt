@@ -21,12 +21,19 @@ object MasterPasswordManager {
     private const val KEY_ENCRYPTED_VAULT_KEY = "encrypted_vault_key_blob"
     private const val KEY_VAULT_KEY_IV_INNER = "vault_key_iv_inner"
     private const val KEY_VAULT_KEY_IV_OUTER = "vault_key_iv_outer"
+    private const val KEY_AUTH_TIMEOUT = "auth_timeout"
+    private const val KEY_CRYPTO_VERSION = "crypto_version"
+    private const val KEY_LOCK_ON_EXIT = "lock_on_exit"
 
     @Volatile
     private var masterKey: SecretKeySpec? = null
     
     @Volatile
     private var vaultKey: SecretKeySpec? = null
+
+    @Volatile
+    private var lastUnlockTimestamp: Long = 0
+    private const val DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS = 60_000L // 60 seconds
 
     /**
      * Checks if a master password and vault key have already been set up.
@@ -44,9 +51,11 @@ object MasterPasswordManager {
     fun setupVault(context: Context, password: CharArray) {
         EncryptionManager.init(context)
         val salt = KeyDerivationManager.generateSalt()
+        val version = KeyDerivationManager.LATEST_VERSION
         saveSalt(context, salt)
+        saveCryptoVersion(context, version)
         
-        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt)
+        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt, version)
         
         // Generate a random 256-bit Vault Key
         val rawVaultKey = ByteArray(32)
@@ -64,6 +73,7 @@ object MasterPasswordManager {
         // Store in memory for immediate use
         masterKey = derivedMasterKey
         vaultKey = newVaultKey
+        lastUnlockTimestamp = System.currentTimeMillis()
         
         SensitiveDataManager.clearSensitiveData(password)
         rawVaultKey.fill(0)
@@ -75,7 +85,8 @@ object MasterPasswordManager {
     fun unlockVault(context: Context, password: CharArray) {
         EncryptionManager.init(context)
         val salt = getSalt(context) ?: throw IllegalStateException("Vault not set up")
-        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt)
+        val version = getCryptoVersion(context)
+        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt, version)
         
         val outerCiphertext = getStoredValue(context, KEY_ENCRYPTED_VAULT_KEY) ?: throw IllegalStateException("Vault key missing")
         val outerIv = getStoredValue(context, KEY_VAULT_KEY_IV_OUTER) ?: throw IllegalStateException("Outer IV missing")
@@ -91,6 +102,7 @@ object MasterPasswordManager {
         
         masterKey = derivedMasterKey
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        lastUnlockTimestamp = System.currentTimeMillis()
         
         SensitiveDataManager.clearSensitiveData(password)
         innerCiphertext.fill(0)
@@ -101,14 +113,123 @@ object MasterPasswordManager {
     
     fun getSessionKey(): SecretKeySpec? = vaultKey
 
+    /**
+     * Wraps the current vault key with the master key for cloud backup/recovery.
+     */
+    fun getWrappedVaultKey(): EncryptedData? {
+        val currentVaultKey = vaultKey ?: return null
+        val currentMasterKey = masterKey ?: return null
+        return EncryptionManager.encryptWithKey(currentVaultKey.encoded, currentMasterKey)
+    }
+
+    /**
+     * Imports a vault key from the cloud by unwrapping it with the master key.
+     * Then hardens it with the hardware key and saves it locally.
+     */
+    fun importVaultKey(context: Context, wrappedKey: EncryptedData) {
+        val currentMasterKey = masterKey ?: throw IllegalStateException("Vault is locked")
+        
+        // 1. Unwrap with Master Key
+        val rawVaultKey = EncryptionManager.decryptWithKey(wrappedKey, currentMasterKey)
+        
+        // 2. Wrap with hardware-backed Root Key
+        val innerEncrypted = EncryptionManager.encryptWithKey(rawVaultKey, currentMasterKey)
+        val outerEncrypted = EncryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
+        
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+        
+        // 3. Update in memory
+        vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        rawVaultKey.fill(0)
+    }
+
+    /**
+     * Changes the master password and upgrades crypto parameters if necessary.
+     */
+    fun changeMasterPassword(context: Context, newPassword: CharArray) {
+        val currentVaultKey = vaultKey ?: throw IllegalStateException("Vault must be unlocked")
+        
+        val newSalt = KeyDerivationManager.generateSalt()
+        val newVersion = KeyDerivationManager.LATEST_VERSION
+        
+        // Derive new master key with latest parameters
+        val newMasterKey = KeyDerivationManager.deriveKey(newPassword, newSalt, newVersion)
+        
+        // Layer 1: Encrypt Vault Key with NEW Master Key
+        val rawVaultKey = currentVaultKey.encoded
+        val innerEncrypted = EncryptionManager.encryptWithKey(rawVaultKey, newMasterKey)
+        
+        // Layer 2: Wrap with hardware-backed Root Key
+        val outerEncrypted = EncryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
+        
+        // Persist everything
+        saveSalt(context, newSalt)
+        saveCryptoVersion(context, newVersion)
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+        
+        // Update in-memory keys
+        masterKey = newMasterKey
+        SensitiveDataManager.clearSensitiveData(rawVaultKey)
+    }
+
     fun lockVault() {
-        masterKey?.let { SensitiveDataManager.clearSensitiveData(it.encoded) }
-        vaultKey?.let { SensitiveDataManager.clearSensitiveData(it.encoded) }
+        masterKey?.let { 
+            val bytes = it.encoded
+            SensitiveDataManager.clearSensitiveData(bytes)
+        }
+        vaultKey?.let { 
+            val bytes = it.encoded
+            SensitiveDataManager.clearSensitiveData(bytes)
+        }
         masterKey = null
         vaultKey = null
+        lastUnlockTimestamp = 0
     }
 
     fun isUnlocked(): Boolean = vaultKey != null
+
+    /**
+     * Checks if the vault is unlocked AND the recent authentication is still valid.
+     */
+    fun isAutofillAuthorized(context: android.content.Context): Boolean {
+        if (vaultKey == null) return false
+        val now = System.currentTimeMillis()
+        val timeout = getAuthTimeout(context)
+        if (timeout == 0L) return false // Always require biometric
+        return (now - lastUnlockTimestamp) < timeout
+    }
+
+    fun getAuthTimeout(context: android.content.Context): Long {
+        return getPrefs(context).getLong(KEY_AUTH_TIMEOUT, DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS)
+    }
+
+    fun setAuthTimeout(context: android.content.Context, timeoutMs: Long) {
+        getPrefs(context).edit().putLong(KEY_AUTH_TIMEOUT, timeoutMs).apply()
+    }
+
+    fun shouldLockOnExit(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_LOCK_ON_EXIT, true)
+    }
+
+    fun setLockOnExit(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_LOCK_ON_EXIT, enabled).apply()
+    }
+
+    /**
+     * Resets the autofill authorization timer (e.g. after a fresh biometric check).
+     */
+    fun authorizeAutofill() {
+        lastUnlockTimestamp = System.currentTimeMillis()
+    }
+
+    /**
+     * Responds to system memory pressure by purging sensitive keys.
+     */
+    fun onTrimMemory(level: Int) {
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            lockVault()
+        }
+    }
 
     private fun saveSalt(context: Context, salt: ByteArray) {
         getPrefs(context).edit().putString(KEY_SALT, Base64.encodeToString(salt, Base64.NO_WRAP)).apply()
@@ -117,6 +238,14 @@ object MasterPasswordManager {
     fun getSalt(context: Context): ByteArray? {
         val saltString = getPrefs(context).getString(KEY_SALT, null) ?: return null
         return Base64.decode(saltString, Base64.NO_WRAP)
+    }
+
+    private fun saveCryptoVersion(context: Context, version: Int) {
+        getPrefs(context).edit().putInt(KEY_CRYPTO_VERSION, version).apply()
+    }
+
+    fun getCryptoVersion(context: Context): Int {
+        return getPrefs(context).getInt(KEY_CRYPTO_VERSION, 1)
     }
 
     private fun saveHardenedVaultKey(context: Context, innerIv: ByteArray, outerEnc: EncryptedData) {

@@ -1,7 +1,7 @@
 package com.hariharan.zerokey.security
 
 import android.content.Context
-import android.util.Log
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
@@ -9,7 +9,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetCredentialResponse
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import com.google.firebase.auth.FirebaseAuth
@@ -18,8 +18,8 @@ import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.tasks.await
 
 /**
- * Handles Firebase Authentication for user identity.
- * Supports Email/Password and Google Sign-In via Credentials Manager.
+ * FINAL RE-WRITTEN MODERNIZED IMPLEMENTATION (2026 Recommended Stack)
+ * This version explicitly uses .setFilterByAuthorizedAccounts(false) to ensure all accounts appear.
  */
 class FirebaseAuthenticator {
 
@@ -42,7 +42,7 @@ class FirebaseAuthenticator {
             val result = auth.createUserWithEmailAndPassword(email, password).await()
             result.user
         } catch (e: Exception) {
-            Log.e("FirebaseAuthenticator", "SignUp failed: ${e.message}")
+            PrivacyLogger.e("FirebaseAuthenticator", "SignUp failed: ${e.message}")
             null
         }
     }
@@ -55,42 +55,50 @@ class FirebaseAuthenticator {
             val result = auth.signInWithEmailAndPassword(email, password).await()
             result.user
         } catch (e: Exception) {
-            Log.e("FirebaseAuthenticator", "SignIn failed: ${e.message}")
+            PrivacyLogger.e("FirebaseAuthenticator", "SignIn failed: ${e.message}")
             null
         }
     }
 
     /**
-     * Sign in with Google using Credentials Manager.
+     * Sign in with Google using Android Credential Manager.
      */
     suspend fun signInWithGoogle(context: Context, serverClientId: String): FirebaseUser? {
         val credentialManager = CredentialManager.create(context)
+        val nonce = java.util.UUID.randomUUID().toString()
 
-        // Using GetSignInWithGoogleOption for explicit button clicks as recommended by documentation
-        val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
+        PrivacyLogger.d("FirebaseAuthenticator", "FORCED RE-INIT: Sign-In with Client ID: $serverClientId")
+
+        // FORCED CONFIGURATION: setFilterByAuthorizedAccounts(false)
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false) 
+            .setServerClientId(serverClientId)
+            .setNonce(nonce)
+            .setAutoSelectEnabled(false)
             .build()
 
         val request = GetCredentialRequest.Builder()
-            .addCredentialOption(signInWithGoogleOption)
+            .addCredentialOption(googleIdOption)
             .build()
 
         return try {
             val result = credentialManager.getCredential(context, request)
             handleGoogleCredential(result)
         } catch (e: NoCredentialException) {
-            Log.e("FirebaseAuthenticator", "No Google accounts found. Ensure a Google account is signed in on the device and SHA-1 is correctly configured in Firebase Console.")
+            PrivacyLogger.e("FirebaseAuthenticator", "CRITICAL ERROR: No credentials found. Check Test User list in Google Cloud Console.")
             null
         } catch (e: GetCredentialException) {
-            Log.e("FirebaseAuthenticator", "Credential Manager Error: ${e.type} - ${e.message}")
+            PrivacyLogger.e("FirebaseAuthenticator", "Credential Manager Error: ${e.type} - ${e.message}")
             null
         } catch (e: Exception) {
-            Log.e("FirebaseAuthenticator", "Unexpected Google Sign-In Error", e)
+            PrivacyLogger.e("FirebaseAuthenticator", "Unexpected Error: ${e.message}", e)
             null
         }
     }
 
     private suspend fun handleGoogleCredential(result: GetCredentialResponse): FirebaseUser? {
         val credential = result.credential
+        PrivacyLogger.d("FirebaseAuthenticator", "Processing credential type: ${credential.type}")
         
         return when {
             credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL -> {
@@ -100,12 +108,15 @@ class FirebaseAuthenticator {
                     val authResult = auth.signInWithCredential(firebaseCredential).await()
                     authResult.user
                 } catch (e: GoogleIdTokenParsingException) {
-                    Log.e("FirebaseAuthenticator", "Received an invalid google id token response", e)
+                    PrivacyLogger.e("FirebaseAuthenticator", "Invalid Google ID Token", e)
+                    null
+                } catch (e: Exception) {
+                    PrivacyLogger.e("FirebaseAuthenticator", "Firebase Sign-In failed: ${e.message}")
                     null
                 }
             }
             else -> {
-                Log.e("FirebaseAuthenticator", "Received unexpected credential type: ${credential.type}")
+                PrivacyLogger.e("FirebaseAuthenticator", "Unexpected credential type: ${credential.type}")
                 null
             }
         }
@@ -117,7 +128,7 @@ class FirebaseAuthenticator {
         try {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())
         } catch (e: Exception) {
-            Log.e("FirebaseAuthenticator", "Clear credential state failed", e)
+            PrivacyLogger.e("FirebaseAuthenticator", "Clear credential state failed", e)
         }
     }
 }

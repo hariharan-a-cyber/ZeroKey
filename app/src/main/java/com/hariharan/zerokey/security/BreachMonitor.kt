@@ -1,6 +1,6 @@
 package com.hariharan.zerokey.security
 
-import android.util.Log
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import com.hariharan.zerokey.core.common.SensitiveDataManager
 import io.ktor.client.*
 import io.ktor.client.engine.android.*
@@ -77,12 +77,12 @@ object BreachMonitor {
                 }
                 
                 if (isCompromised) {
-                    Log.w("BreachMonitor", "Security Alert: Match found in HIBP database.")
+                    PrivacyLogger.w("BreachMonitor", "Security Alert: Match found in HIBP database.")
                 }
                 return isCompromised
             }
         } catch (e: Exception) {
-            Log.e("BreachMonitor", "Network breach check failed", e)
+            PrivacyLogger.e("BreachMonitor", "Network breach check failed", e)
         } finally {
             // 5. Memory Hardening: Explicitly wipe all sensitive buffers
             SensitiveDataManager.clearSensitiveData(passwordBytes)

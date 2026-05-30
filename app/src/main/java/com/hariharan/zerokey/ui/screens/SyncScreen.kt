@@ -113,6 +113,22 @@ fun SyncScreen(
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
 
+                if (syncState is SyncViewModel.SyncStatus.Error && (syncState as SyncViewModel.SyncStatus.Error).canReset) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { viewModel.forceResetCloudVault(userId) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Overwrite Cloud Vault (Force Fix)")
+                    }
+                    Text(
+                        "This will replace your cloud data with your current local passwords.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
                 Spacer(modifier = Modifier.weight(1f))
 
                 // Sync Actions Card

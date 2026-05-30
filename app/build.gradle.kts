@@ -86,11 +86,12 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.androidx.autofill)
     implementation(libs.googleid)
     
     // Ktor for Breach Monitoring
-    implementation("io.ktor:ktor-client-android:3.0.1")
-    implementation("io.ktor:ktor-client-logging:3.0.1")
+    implementation(libs.ktor.client.android)
+    implementation(libs.ktor.client.logging)
     
     // Argon2 for Secure Key Derivation
     implementation(libs.argon2kt)

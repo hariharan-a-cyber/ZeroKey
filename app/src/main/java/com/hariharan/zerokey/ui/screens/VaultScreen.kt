@@ -26,6 +26,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import androidx.biometric.BiometricPrompt
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.security.SecurityEventManager
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
@@ -42,7 +45,8 @@ fun VaultScreen(
     onPasswordHealthClick: () -> Unit = {},
     onSecurityDashboardClick: () -> Unit = {},
     onSharingClick: () -> Unit = {},
-    onSyncClick: () -> Unit = {}
+    onSyncClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {}
 ) {
     val passwords = viewModel.passwords
     val searchQuery = viewModel.searchQuery
@@ -50,6 +54,7 @@ fun VaultScreen(
     val scope = rememberCoroutineScope()
     
     var showMenu by remember { mutableStateOf(false) }
+    var showOfflineModeDialog by remember { mutableStateOf(false) }
 
     // Export File Launcher
     val exportLauncher = rememberLauncherForActivityResult(
@@ -104,6 +109,45 @@ fun VaultScreen(
     }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
+
+    if (showOfflineModeDialog) {
+        AlertDialog(
+            onDismissRequest = { showOfflineModeDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Activate Stealth Protocol?")
+                }
+            },
+            text = {
+                Text(
+                    "This will disable all cloud synchronization. Your data will stay local-only.\n\n" +
+                            "WARNING: If you lose this device or uninstall the app, your passwords CANNOT be recovered without a manual backup."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.toggleOfflineMode(context, true)
+                        showOfflineModeDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Activate")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOfflineModeDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -196,6 +240,14 @@ fun VaultScreen(
                                     onSecurityActivityClick()
                                 }
                             )
+                            DropdownMenuItem(
+                                text = { Text("Settings") },
+                                leadingIcon = { Icon(Icons.Default.Settings, null) },
+                                onClick = {
+                                    showMenu = false
+                                    onSettingsClick()
+                                }
+                            )
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                             DropdownMenuItem(
                                 text = {
@@ -204,7 +256,13 @@ fun VaultScreen(
                                         Spacer(Modifier.width(8.dp))
                                         Switch(
                                             checked = viewModel.isOfflineMode,
-                                            onCheckedChange = { viewModel.toggleOfflineMode(context, it) },
+                                            onCheckedChange = { enabled ->
+                                                if (enabled) {
+                                                    showOfflineModeDialog = true
+                                                } else {
+                                                    viewModel.toggleOfflineMode(context, false)
+                                                }
+                                            },
                                             modifier = Modifier.scale(0.7f)
                                         )
                                     }
@@ -217,7 +275,15 @@ fun VaultScreen(
                                 leadingIcon = { Icon(Icons.Default.FileUpload, null) },
                                 onClick = {
                                     showMenu = false
-                                    exportLauncher.launch("zerokey_backup.json")
+                                    val activity = context as? FragmentActivity
+                                    if (activity != null) {
+                                        triggerExportAuth(activity) {
+                                            exportLauncher.launch("ZeroKey_Backup.json")
+                                        }
+                                    } else {
+                                        // Fallback for non-activity context if any
+                                        exportLauncher.launch("ZeroKey_Backup.json")
+                                    }
                                 }
                             )
                             DropdownMenuItem(
@@ -400,6 +466,7 @@ fun StatCard(label: String, value: String, modifier: Modifier = Modifier, color:
 @Composable
 fun PasswordItemCard(item: PasswordItem, viewModel: PasswordViewModel) {
     var visible by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
@@ -409,6 +476,30 @@ fun PasswordItemCard(item: PasswordItem, viewModel: PasswordViewModel) {
             delay(10000)
             visible = false
         }
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Delete Credential") },
+            text = { Text("Are you sure you want to delete the password for ${item.serviceName}? This cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deletePassword(item)
+                        showDeleteDialog = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Surface(
@@ -449,29 +540,60 @@ fun PasswordItemCard(item: PasswordItem, viewModel: PasswordViewModel) {
                 )
             }
 
-            IconButton(
-                onClick = {
-                    copyToClipboard(context, item.password)
-                    viewModel.logPasswordCopied(item.serviceName)
-                    coroutineScope.launch {
-                        delay(30000)
-                        clearClipboard(context)
-                    }
-                    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                },
-                colors = IconButtonDefaults.iconButtonColors(
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(20.dp))
+            Row {
+                IconButton(
+                    onClick = {
+                        copyToClipboard(context, item.password)
+                        viewModel.logPasswordCopied(item.serviceName)
+                        coroutineScope.launch {
+                            delay(30000)
+                            clearClipboard(context)
+                        }
+                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = IconButtonDefaults.iconButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(20.dp))
+                }
+
+                IconButton(
+                    onClick = { showDeleteDialog = true },
+                    colors = IconButtonDefaults.iconButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                    )
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(20.dp))
+                }
             }
         }
     }
 }
 
+private fun triggerExportAuth(activity: FragmentActivity, onSuccess: () -> Unit) {
+    val executor = ContextCompat.getMainExecutor(activity)
+    val biometricPrompt = BiometricPrompt(activity, executor,
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                super.onAuthenticationSucceeded(result)
+                onSuccess()
+            }
+        })
+
+    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+        .setTitle("Export Authorization")
+        .setSubtitle("Confirm your identity to export the vault")
+        .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or 
+                                 androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        .build()
+
+    biometricPrompt.authenticate(promptInfo)
+}
+
 private fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("zerokey_password", text)
+    val clip = ClipData.newPlainText("ZeroKey_Password", text)
     clipboard.setPrimaryClip(clip)
 }
 

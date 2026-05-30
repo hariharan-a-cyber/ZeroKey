@@ -25,7 +25,12 @@ data class PasswordEntity(
     // Phase 2 Columns
     val passkeyCredentialId: String? = null,
     val lastBreachCheck: Long = 0,
-    val breachFound: Boolean = false
+    val breachFound: Boolean = false,
+    
+    // Cryptographic Binding (AAD)
+    val recordUid: String = java.util.UUID.randomUUID().toString(),
+    val encryptionVersion: Int = 1,
+    val schemaVersion: Int = 6
 )
 
 @Serializable

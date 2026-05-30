@@ -8,5 +8,7 @@ data class VaultMetadata(
     @PrimaryKey val id: Int = 0,
     val vaultVersion: Long = 1,
     val lastSyncTimestamp: Long = 0,
-    val deviceId: String
+    val deviceId: String,
+    val vaultEpochId: String = "",
+    val lastKnownHmac: String? = null
 )

@@ -1,7 +1,7 @@
 package com.hariharan.zerokey.emergency
 
 import android.util.Base64
-import android.util.Log
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import com.google.firebase.firestore.FirebaseFirestore
 import com.hariharan.zerokey.security.CryptoEngine
 import kotlinx.coroutines.tasks.await
@@ -54,10 +54,10 @@ class EmergencyAccessManager(
                 .set(config)
                 .await()
 
-            Log.i(TAG, "Emergency Access configured for owner: ${config.ownerUid}")
+            PrivacyLogger.i(TAG, "Emergency Access configured for owner: ${config.ownerUid}")
             EmergencySetupResult.Success
         } catch (e: Exception) {
-            Log.e(TAG, "Setup failed", e)
+            PrivacyLogger.e(TAG, "Setup failed", e)
             EmergencySetupResult.Failure(e.message ?: "Unknown error")
         }
     }
@@ -103,7 +103,7 @@ class EmergencyAccessManager(
 
             AccessRequestResult.RequestAccepted(approveAt)
         } catch (e: Exception) {
-            Log.e(TAG, "Access request failed", e)
+            PrivacyLogger.e(TAG, "Access request failed", e)
             AccessRequestResult.Failure(e.message ?: "Unknown error")
         }
     }
@@ -127,7 +127,7 @@ class EmergencyAccessManager(
                 .update("status", EmergencyStatus.CANCELLED.name)
                 .await()
             
-            Log.i(TAG, "Emergency request overridden by owner.")
+            PrivacyLogger.i(TAG, "Emergency request overridden by owner.")
             CancelResult.Cancelled
         } catch (e: Exception) {
             CancelResult.Failure(e.message ?: "Unknown error")
@@ -156,7 +156,7 @@ class EmergencyAccessManager(
                 ))
                 .await()
             
-            Log.i(TAG, "Emergency request manually approved by owner.")
+            PrivacyLogger.i(TAG, "Emergency request manually approved by owner.")
             EmergencySetupResult.Success
         } catch (e: Exception) {
             EmergencySetupResult.Failure(e.message ?: "Unknown error")
@@ -211,7 +211,7 @@ class EmergencyAccessManager(
             sig.update(data.toByteArray())
             sig.verify(Base64.decode(signatureBase64, Base64.NO_WRAP))
         } catch (e: Exception) {
-            Log.e(TAG, "Signature verification error", e)
+            PrivacyLogger.e(TAG, "Signature verification error", e)
             false
         }
     }

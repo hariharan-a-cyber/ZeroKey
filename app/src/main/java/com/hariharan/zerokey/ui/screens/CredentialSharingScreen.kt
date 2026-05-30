@@ -1,6 +1,10 @@
 package com.hariharan.zerokey.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -8,9 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.PersonAdd
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,7 +30,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun CredentialSharingScreen(
     viewModel: PasswordViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    userId: String
 ) {
     var recipientId by remember { mutableStateOf("") }
     var selectedCredentialId by remember { mutableStateOf<Int?>(null) }
@@ -79,12 +82,60 @@ fun CredentialSharingScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
+                // My Sharing Identity Card
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Fingerprint, null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(12.dp))
+                            Text("My Sharing Identity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Give this ID to others so they can share passwords with you securely.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = userId,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.primary,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            IconButton(onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("user_id", userId))
+                                Toast.makeText(context, "ID copied to clipboard", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy ID", modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+
                 Text(
-                    "Share encrypted credentials using ECIES (Curve25519). Recipients must provide their public key registry ID.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "Share a Credential",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
                 )
 
                 OutlinedTextField(
@@ -96,17 +147,28 @@ fun CredentialSharingScreen(
                     leadingIcon = { Icon(Icons.Default.PersonAdd, null) }
                 )
 
-                Button(
+                OutlinedButton(
                     onClick = { showCredentialPicker = true },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
                     shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.primary
                     )
                 ) {
                     val label = viewModel.passwords.find { it.id == selectedCredentialId }?.serviceName ?: "Select Credential to Share"
-                    Text(label)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.ExtraBold)
+                        )
+                    }
                 }
 
                 Text(
@@ -135,9 +197,8 @@ fun CredentialSharingScreen(
 
                 Button(
                     onClick = {
-                        val senderId = "current_user_id" // In a real app, get from Auth
                         selectedCredentialId?.let { id ->
-                            viewModel.shareCredential(senderId, recipientId, id)
+                            viewModel.shareCredential(userId, recipientId, id)
                             Toast.makeText(context, "Secure share initialized", Toast.LENGTH_SHORT).show()
                             recipientId = ""
                             selectedCredentialId = null

@@ -1,17 +1,14 @@
 package com.hariharan.zerokey.sync
 
-import android.util.Log
 import com.hariharan.zerokey.security.CryptoEngine
 import com.hariharan.zerokey.security.HmacEngine
+import com.hariharan.zerokey.data.database.PasswordEntity
+import com.hariharan.zerokey.utils.PrivacyLogger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
-import com.hariharan.zerokey.data.database.PasswordEntity
 
 /**
  * VaultConflictResolver
- *
- * Strategy: Last-Write-Wins based on timestamp.
- * If timestamps are within a 5-second window, merge using field-level union.
  */
 class VaultConflictResolver(
     private val cryptoEngine: CryptoEngine,
@@ -29,7 +26,7 @@ class VaultConflictResolver(
         hmacKey: ByteArray
     ): PullResult {
         if (local == null) {
-            Log.i(TAG, "No local vault — accepting remote")
+            PrivacyLogger.i(TAG, "No local vault — accepting remote")
             return acceptRemote(remote, encryptionKey, hmacKey)
         }
 
@@ -37,22 +34,18 @@ class VaultConflictResolver(
 
         return when {
             remote.timestamp > local.timestamp -> {
-                Log.i(TAG, "Remote wins (newer by ${remote.timestamp - local.timestamp}ms)")
+                PrivacyLogger.i(TAG, "Remote snapshot wins (newer)")
                 acceptRemote(remote, encryptionKey, hmacKey)
             }
             local.timestamp > remote.timestamp -> {
-                Log.i(TAG, "Local wins (newer by ${local.timestamp - remote.timestamp}ms)")
-                // Re-push local to remote
+                PrivacyLogger.i(TAG, "Local snapshot wins (newer)")
                 acceptRemote(local, encryptionKey, hmacKey)
             }
             timeDiff <= MERGE_WINDOW_MS -> {
-                Log.i(TAG, "Timestamps tied — attempting field-level merge")
+                PrivacyLogger.i(TAG, "Timestamps tied — attempting merge")
                 mergeVaults(remote, local, encryptionKey, hmacKey)
             }
-            else -> {
-                // Exact same timestamp, same version — no real conflict
-                acceptRemote(remote, encryptionKey, hmacKey)
-            }
+            else -> acceptRemote(remote, encryptionKey, hmacKey)
         }
     }
 
@@ -67,16 +60,12 @@ class VaultConflictResolver(
             val combined = ivBytes + ciphertextBytes
             
             val decrypted = cryptoEngine.decryptAesGcm(combined, encryptionKey)
-            PullResult.Success(String(decrypted, Charsets.UTF_8), blob.vaultVersion)
+            PullResult.Success(String(decrypted, Charsets.UTF_8), blob.vaultVersion, blob.hmac)
         } catch (e: Exception) {
-            PullResult.Failure("Decryption failed during conflict resolution: ${e.message}")
+            PullResult.Failure("Decryption failed during conflict resolution")
         }
     }
 
-    /**
-     * Field-level merge: union of credential IDs from both vaults.
-     * Decrypts both sides, merges JSON at the entity level.
-     */
     private fun mergeVaults(
         remote: EncryptedVaultBlob,
         local: EncryptedVaultBlob,
@@ -93,36 +82,27 @@ class VaultConflictResolver(
             val localJson = String(cryptoEngine.decryptAesGcm(localIv + localCipher, encryptionKey), Charsets.UTF_8)
 
             val merged = mergeVaultJson(remoteJson, localJson)
-            Log.i(TAG, "Field-level merge succeeded")
-            PullResult.Success(merged, maxOf(remote.vaultVersion, local.vaultVersion))
+            PrivacyLogger.i(TAG, "Field-level merge succeeded")
+            PullResult.Success(merged, remote.vaultVersion, remote.hmac)
         } catch (e: Exception) {
-            Log.e(TAG, "Merge failed, falling back to remote", e)
+            PrivacyLogger.e(TAG, "Merge failed: ${PrivacyLogger.sanitizeError(e.message)}")
             acceptRemote(remote, encryptionKey, hmacKey)
         }
     }
 
-    /**
-     * JSON-level merge of vault credential arrays.
-     * Uses entity.id as the deduplication key.
-     */
     private fun mergeVaultJson(remoteJson: String, localJson: String): String {
         val json = Json { ignoreUnknownKeys = true }
         val remoteEntities = json.decodeFromString(ListSerializer(PasswordEntity.serializer()), remoteJson)
         val localEntities = json.decodeFromString(ListSerializer(PasswordEntity.serializer()), localJson)
 
         val merged = mutableMapOf<Int, PasswordEntity>()
-
-        // Add all local first
         localEntities.forEach { merged[it.id] = it }
-
-        // Remote overwrites only if newer
         remoteEntities.forEach { remote ->
             val existing = merged[remote.id]
             if (existing == null || remote.lastModified > existing.lastModified) {
                 merged[remote.id] = remote
             }
         }
-
         return json.encodeToString(ListSerializer(PasswordEntity.serializer()), merged.values.toList())
     }
 }

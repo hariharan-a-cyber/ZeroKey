@@ -22,6 +22,8 @@ object MasterPasswordManager {
     private const val KEY_ENCRYPTED_VAULT_KEY = "encrypted_vault_key_blob"
     private const val KEY_VAULT_KEY_IV_INNER = "vault_key_iv_inner"
     private const val KEY_VAULT_KEY_IV_OUTER = "vault_key_iv_outer"
+    private const val KEY_CRYPTO_ITERATIONS = "crypto_iterations"
+    private const val KEY_CRYPTO_MEMORY = "crypto_memory"
 
     @Volatile
     private var masterKey: SecretKeySpec? = null
@@ -38,7 +40,12 @@ object MasterPasswordManager {
         val salt = KeyDerivationManager.generateSalt()
         saveSalt(context, salt)
         
-        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt)
+        // Save current best parameters for new vaults
+        val iterations = KeyDerivationManager.DEFAULT_ITERATIONS
+        val memoryKib = KeyDerivationManager.DEFAULT_MEMORY_KIB
+        saveCryptoParams(context, iterations, memoryKib)
+        
+        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt, iterations, memoryKib)
         
         val rawVaultKey = ByteArray(32)
         SecureRandom().nextBytes(rawVaultKey)
@@ -59,7 +66,12 @@ object MasterPasswordManager {
     fun unlockVault(context: Context, password: CharArray) {
         EncryptionManager.init()
         val salt = getSalt(context) ?: throw IllegalStateException("Vault not set up")
-        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt)
+        
+        // Read parameters or fall back to legacy values
+        val iterations = getStoredInt(context, KEY_CRYPTO_ITERATIONS, KeyDerivationManager.LEGACY_ITERATIONS)
+        val memoryKib = getStoredInt(context, KEY_CRYPTO_MEMORY, KeyDerivationManager.LEGACY_MEMORY_KIB)
+        
+        val derivedMasterKey = KeyDerivationManager.deriveKey(password, salt, iterations, memoryKib)
         
         val outerCiphertext = getStoredValue(context, KEY_ENCRYPTED_VAULT_KEY) ?: throw IllegalStateException("Vault key missing")
         val outerIv = getStoredValue(context, KEY_VAULT_KEY_IV_OUTER) ?: throw IllegalStateException("Outer IV missing")
@@ -109,6 +121,18 @@ object MasterPasswordManager {
     }
 
     private fun getStoredValue(context: Context, key: String): String? = getPrefs(context).getString(key, null)
+
+    private fun saveCryptoParams(context: Context, iterations: Int, memoryKib: Int) {
+        getPrefs(context).edit().apply {
+            putInt(KEY_CRYPTO_ITERATIONS, iterations)
+            putInt(KEY_CRYPTO_MEMORY, memoryKib)
+            apply()
+        }
+    }
+
+    private fun getStoredInt(context: Context, key: String, defaultValue: Int): Int {
+        return getPrefs(context).getInt(key, defaultValue)
+    }
 
     private fun getPrefs(context: Context) = EncryptedSharedPreferences.create(
         context,

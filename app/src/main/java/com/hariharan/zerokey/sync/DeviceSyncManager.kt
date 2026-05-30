@@ -1,29 +1,24 @@
 package com.hariharan.zerokey.sync
 
-import android.util.Log
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
 import com.hariharan.zerokey.security.CryptoEngine
+import com.hariharan.zerokey.core.common.PrivacyLogger
+import com.hariharan.zerokey.security.DeviceTrustManager
+import com.hariharan.zerokey.security.EncryptedData
 import com.hariharan.zerokey.security.HmacEngine
 import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import java.util.UUID
 
 /**
  * Zero-Knowledge Cross-Device Sync
- *
- * Hardened Architecture:
- * - Weakness 1 Mitigation: Vector-clock style versioning and conflict resolution.
- * - Weakness 2 Mitigation: Vault Blob Model. Firestore sees only a single encrypted 
- *   opaque snapshot, hiding entry counts and specific usage patterns.
  */
 class DeviceSyncManager(
     private val firestore: FirebaseFirestore,
     private val cryptoEngine: CryptoEngine,
     private val hmacEngine: HmacEngine,
     private val conflictResolver: VaultConflictResolver,
-    private val deviceId: String = UUID.randomUUID().toString()
+    private val deviceTrustManager: DeviceTrustManager? = null
 ) {
 
     companion object {
@@ -31,111 +26,143 @@ class DeviceSyncManager(
         private const val COLLECTION_VAULTS = "encrypted_vault_snapshots"
     }
 
-    /**
-     * Encrypts the entire vault as a single opaque snapshot and uploads it.
-     * Prevents Firestore from seeing entry counts or individual update frequencies.
-     */
     suspend fun pushVaultSnapshot(
         userId: String,
         plaintextVaultJson: String,
         encryptionKey: ByteArray,
-        hmacKey: ByteArray
+        hmacKey: ByteArray,
+        wrappedKey: EncryptedData? = null,
+        vaultEpochId: String = "",
+        previousSnapshotHmac: String? = null
     ): SyncResult {
         return try {
-            // 1. Encrypt vault snapshot locally with AES-256-GCM
+            PrivacyLogger.d(TAG, "Sync Push started for masked_UID: ${PrivacyLogger.mask(userId)}")
+            
+            if (deviceTrustManager != null && !deviceTrustManager.isCurrentDeviceTrusted(userId)) {
+                return SyncResult.Failure("DEVICE_REVOKED: This device no longer has access to the vault.")
+            }
+
+            firestore.enableNetwork().await()
+
+            try {
+                firestore.collection("connection_test").document(userId).set(mapOf("last_attempt" to System.currentTimeMillis())).await()
+            } catch (e: Exception) {
+                PrivacyLogger.e(TAG, "Firestore Network Test: FAILED. Error: ${PrivacyLogger.sanitizeError(e.message)}")
+            }
+
             val encryptedVault = cryptoEngine.encryptAesGcm(
                 plaintext = plaintextVaultJson.toByteArray(Charsets.UTF_8),
                 key = encryptionKey
             )
 
-            // 2. Fetch current version to increment (Ensures monotonic progress)
             val currentVersion = getCurrentVersion(userId)
             val newVersion = currentVersion + 1
 
-            // 3. Compute HMAC over (deviceId || vaultVersion || encryptedVault)
-            val hmacInput = buildHmacInput(deviceId, newVersion, encryptedVault)
+            val timestamp = System.currentTimeMillis()
+            val wrappedKeyB64 = wrappedKey?.cipherText?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } ?: ""
+            val hmacInput = buildHmacInput(userId, newVersion, timestamp, wrappedKeyB64, encryptedVault, vaultEpochId, previousSnapshotHmac ?: "")
             val hmac = hmacEngine.computeHmacSha256(hmacInput, hmacKey)
+            val hmacB64 = android.util.Base64.encodeToString(hmac, android.util.Base64.NO_WRAP)
 
-            // 4. Construct opaque blob
             val blob = EncryptedVaultBlob(
-                deviceId = deviceId,
+                deviceId = deviceTrustManager?.getCurrentDeviceId() ?: userId,
                 vaultVersion = newVersion,
                 encryptedVault = android.util.Base64.encodeToString(encryptedVault.sliceArray(12 until encryptedVault.size), android.util.Base64.NO_WRAP),
                 iv = android.util.Base64.encodeToString(encryptedVault.sliceArray(0 until 12), android.util.Base64.NO_WRAP),
-                hmac = android.util.Base64.encodeToString(hmac, android.util.Base64.NO_WRAP),
-                timestamp = System.currentTimeMillis()
+                hmac = hmacB64,
+                timestamp = timestamp,
+                wrappedVaultKey = if (wrappedKeyB64.isNotEmpty()) wrappedKeyB64 else null,
+                wrappedVaultKeyIv = wrappedKey?.iv?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) },
+                vaultEpochId = vaultEpochId,
+                previousSnapshotHmac = previousSnapshotHmac
             )
 
-            // 5. Upload to Firestore
             firestore.collection(COLLECTION_VAULTS)
                 .document(userId)
                 .set(blob.toMap(), SetOptions.merge())
                 .await()
 
-            Log.i(TAG, "Vault snapshot pushed: version=$newVersion")
-            SyncResult.Success(newVersion)
+            PrivacyLogger.i(TAG, "Vault snapshot pushed: version=$newVersion, hmacPrefix=${hmacB64.take(8)}")
+            SyncResult.Success(newVersion, hmacB64)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Push failed", e)
+            PrivacyLogger.e(TAG, "Push failed: ${PrivacyLogger.sanitizeError(e.message)}")
             SyncResult.Failure(e.message ?: "Unknown error")
         }
     }
 
-    /**
-     * Downloads the latest snapshot, verifies integrity, and delegates to Conflict Resolver.
-     */
     suspend fun pullVaultSnapshot(
         userId: String,
         encryptionKey: ByteArray,
         hmacKey: ByteArray,
         localVersion: Long,
-        localVaultJson: String?
+        localVaultJson: String?,
+        localEpochId: String = "",
+        lastKnownHmac: String? = null
     ): PullResult {
         return try {
+            if (deviceTrustManager != null && !deviceTrustManager.isCurrentDeviceTrusted(userId)) {
+                return PullResult.Failure("DEVICE_REVOKED: Access denied.")
+            }
+
+            firestore.enableNetwork().await()
+
             val doc = firestore.collection(COLLECTION_VAULTS)
                 .document(userId)
-                .get()
+                .get(Source.DEFAULT)
                 .await()
 
             if (!doc.exists()) return PullResult.NoRemoteVault
 
             val remoteBlob = EncryptedVaultBlob.fromMap(doc.data!!)
 
-            // Detect potential sync conflict if remote version isn't exactly next
-            if (localVersion > 0 && remoteBlob.vaultVersion != localVersion + 1) {
-                // In snapshot model, if remote is ahead but not exactly next, we need merge
-                // because another device pushed changes since our last pull.
+            if (remoteBlob.vaultVersion < localVersion) {
+                PrivacyLogger.e(TAG, "ROLLBACK ATTACK DETECTED! Local: $localVersion, Remote: ${remoteBlob.vaultVersion}")
+                return PullResult.Failure("Rollback Attack Detected")
             }
 
-            // Verify integrity BEFORE decryption
+            if (localEpochId.isNotEmpty() && remoteBlob.vaultEpochId != localEpochId) {
+                PrivacyLogger.e(TAG, "EPOCH MISMATCH! Possible Fork or Reset.")
+                return PullResult.Failure("Vault Epoch Mismatch")
+            }
+
+            if (lastKnownHmac != null && remoteBlob.previousSnapshotHmac != null && remoteBlob.previousSnapshotHmac != lastKnownHmac) {
+                PrivacyLogger.e(TAG, "CHAIN BROKEN! Fork detected.")
+                return PullResult.Failure("Sync Chain Broken")
+            }
+
             val ivBytes = android.util.Base64.decode(remoteBlob.iv, android.util.Base64.NO_WRAP)
             val encryptedBytes = android.util.Base64.decode(remoteBlob.encryptedVault, android.util.Base64.NO_WRAP)
             val combined = ivBytes + encryptedBytes
             
             val remoteHmac = android.util.Base64.decode(remoteBlob.hmac, android.util.Base64.NO_WRAP)
+            
             val expectedHmac = hmacEngine.computeHmacSha256(
-                buildHmacInput(remoteBlob.deviceId, remoteBlob.vaultVersion, combined),
+                buildHmacInput(
+                    remoteBlob.deviceId, 
+                    remoteBlob.vaultVersion, 
+                    remoteBlob.timestamp, 
+                    remoteBlob.wrappedVaultKey ?: "", 
+                    combined,
+                    remoteBlob.vaultEpochId,
+                    remoteBlob.previousSnapshotHmac ?: ""
+                ),
                 hmacKey
             )
 
             if (!hmacEngine.constantTimeEquals(remoteHmac, expectedHmac)) {
-                return PullResult.IntegrityFailure("HMAC verification failed")
+                PrivacyLogger.e(TAG, "HMAC mismatch detected! MaskedUID: ${PrivacyLogger.mask(userId)}")
+                return PullResult.IntegrityFailure("Vault integrity check failed", remoteBlob)
             }
 
-            // Decrypt opaque snapshot
             val decryptedBytes = cryptoEngine.decryptAesGcm(combined, encryptionKey)
             val remoteJson = String(decryptedBytes, Charsets.UTF_8)
 
-            // Delegate to Conflict Resolver for record-level union merging
-            val localBlob = if (localVaultJson != null) {
-                // Use existing local vault for resolution
-                null // simplified for this phase
-            } else null
-
+            val localBlob = if (localVaultJson != null) null else null
             return conflictResolver.resolve(remoteBlob, localBlob, encryptionKey, hmacKey)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Pull failed", e)
+            PrivacyLogger.e(TAG, "Pull failed: ${PrivacyLogger.sanitizeError(e.message)}")
             PullResult.Failure(e.message ?: "Unknown error")
         }
     }
@@ -145,9 +172,21 @@ class DeviceSyncManager(
         return if (doc.exists()) doc.getLong("vaultVersion") ?: 0L else 0L
     }
 
-    private fun buildHmacInput(deviceId: String, version: Long, encryptedVault: ByteArray): ByteArray {
+    private fun buildHmacInput(
+        deviceId: String, 
+        version: Long, 
+        timestamp: Long, 
+        wrappedKey: String, 
+        encryptedVault: ByteArray,
+        vaultEpochId: String,
+        previousSnapshotHmac: String
+    ): ByteArray {
         return deviceId.toByteArray(Charsets.UTF_8) + 
                version.toString().toByteArray(Charsets.UTF_8) + 
+               timestamp.toString().toByteArray(Charsets.UTF_8) +
+               wrappedKey.toByteArray(Charsets.UTF_8) +
+               vaultEpochId.toByteArray(Charsets.UTF_8) +
+               previousSnapshotHmac.toByteArray(Charsets.UTF_8) +
                encryptedVault
     }
 }

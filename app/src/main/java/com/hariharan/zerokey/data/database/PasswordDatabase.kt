@@ -17,7 +17,7 @@ import androidx.room.RoomDatabase
         SyncMetadataEntity::class,
         SecurityScoreHistoryEntity::class
     ],
-    version = 4,
+    version = 6,
     exportSchema = false
 )
 abstract class PasswordDatabase : RoomDatabase() {
@@ -35,7 +35,7 @@ abstract class PasswordDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     PasswordDatabase::class.java,
-                    "zerokey_database"
+                    "ZeroKey_Database"
                 )
                 .fallbackToDestructiveMigration()
                 .build()

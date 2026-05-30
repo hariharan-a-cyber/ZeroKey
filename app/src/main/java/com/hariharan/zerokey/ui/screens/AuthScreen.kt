@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.R
+import com.hariharan.zerokey.GoogleAuthManager
 import com.hariharan.zerokey.security.FirebaseAuthenticator
 import com.hariharan.zerokey.security.MasterPasswordManager
 import kotlinx.coroutines.launch
@@ -46,8 +47,20 @@ fun AuthScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
+    // For Session Restoration: if user is logged in via Google but vault is locked, 
+    // we show a "Restore Session" state to get the Master Password.
+    var isRestoringSession by remember { mutableStateOf(false) }
+    
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val authManager = remember { GoogleAuthManager() }
+
+    // Check if we need to restore vault session
+    LaunchedEffect(Unit) {
+        if (authenticator.isAuthenticated && !MasterPasswordManager.isUnlocked()) {
+            isRestoringSession = true
+        }
+    }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
 
@@ -86,23 +99,25 @@ fun AuthScreen(
             )
             
             Text(
-                text = "The invisible vault for your digital life.",
+                text = if (isRestoringSession) "Session Expired. Unlock your vault." else "The invisible vault for your digital life.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.padding(top = 8.dp, bottom = 48.dp),
                 textAlign = TextAlign.Center
             )
 
-            // Minimalist Form
-            TransparentTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = "Email",
-                leadingIcon = Icons.Default.Email,
-                keyboardType = KeyboardType.Email
-            )
+            if (!isRestoringSession) {
+                // Minimalist Form
+                TransparentTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = "Email",
+                    leadingIcon = Icons.Default.Email,
+                    keyboardType = KeyboardType.Email
+                )
 
-            Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(20.dp))
+            }
 
             TransparentTextField(
                 value = password,
@@ -137,26 +152,35 @@ fun AuthScreen(
                     scope.launch {
                         isLoading = true
                         errorMessage = null
-                        val user = if (isLogin) {
-                            authenticator.signIn(email, password)
-                        } else {
-                            authenticator.signUp(email, password)
-                        }
                         
-                        if (user != null) {
+                        if (isRestoringSession) {
                             try {
-                                // Initialize the Vault session with the Master Password
-                                if (!MasterPasswordManager.isSetup(context)) {
-                                    MasterPasswordManager.setupVault(context, password.toCharArray())
-                                } else {
-                                    MasterPasswordManager.unlockVault(context, password.toCharArray())
-                                }
+                                MasterPasswordManager.unlockVault(context, password.toCharArray())
                                 onAuthSuccess()
                             } catch (e: Exception) {
-                                errorMessage = "Vault unlock failed: ${e.message}"
+                                errorMessage = "Unlock failed: Incorrect password"
                             }
                         } else {
-                            errorMessage = if (isLogin) "Invalid credentials" else "Signup failed"
+                            val user = if (isLogin) {
+                                authenticator.signIn(email, password)
+                            } else {
+                                authenticator.signUp(email, password)
+                            }
+                            
+                            if (user != null) {
+                                try {
+                                    if (!MasterPasswordManager.isSetup(context)) {
+                                        MasterPasswordManager.setupVault(context, password.toCharArray())
+                                    } else {
+                                        MasterPasswordManager.unlockVault(context, password.toCharArray())
+                                    }
+                                    onAuthSuccess()
+                                } catch (e: Exception) {
+                                    errorMessage = "Vault unlock failed: ${e.message}"
+                                }
+                            } else {
+                                errorMessage = if (isLogin) "Invalid credentials" else "Signup failed"
+                            }
                         }
                         isLoading = false
                     }
@@ -169,7 +193,7 @@ fun AuthScreen(
                     containerColor = MaterialTheme.colorScheme.onSurface,
                     contentColor = MaterialTheme.colorScheme.surface
                 ),
-                enabled = !isLoading && email.isNotEmpty() && password.length >= 6
+                enabled = !isLoading && (isRestoringSession || email.isNotEmpty()) && password.length >= 6
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(
@@ -179,43 +203,28 @@ fun AuthScreen(
                     )
                 } else {
                     Text(
-                        text = if (isLogin) "Sign In" else "Create Account",
+                        text = if (isRestoringSession) "Unlock Vault" else if (isLogin) "Sign In" else "Create Account",
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Elegant Google Integration
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        isLoading = true
-                        errorMessage = null
-                        val clientId = context.getString(R.string.default_web_client_id)
-                        val user = authenticator.signInWithGoogle(context, clientId)
-                        if (user != null) {
-                            onAuthSuccess()
-                        } else {
-                            errorMessage = "Google Sign-In failed"
+            if (!isRestoringSession) {
+                Spacer(modifier = Modifier.height(16.dp))
+                // Elegant Google Integration
+                // ...
+            } else {
+                TextButton(
+                    onClick = { 
+                        scope.launch {
+                            authenticator.signOut(context)
+                            isRestoringSession = false
                         }
-                        isLoading = false
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(60.dp),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(width = 1.dp, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Continue with Google",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Medium
-                    )
+                    },
+                    modifier = Modifier.padding(top = 16.dp)
+                ) {
+                    Text("Sign in with a different account", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 

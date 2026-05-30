@@ -31,7 +31,7 @@ abstract class PasswordDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     PasswordDatabase::class.java,
-                    "zerokey_vault_db"
+                    "ZeroKey_Vault_DB"
                 )
                 .fallbackToDestructiveMigration()
                 .build()

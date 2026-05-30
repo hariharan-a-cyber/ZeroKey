@@ -2,13 +2,15 @@ package com.hariharan.zerokey.security
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
-import android.util.Log
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
 /**
@@ -24,11 +26,44 @@ object EncryptionManager {
     private const val IV_LENGTH = 12 
     private const val AUTH_TAG_LENGTH = 128
 
+    enum class KeySecurityLevel {
+        STRONGBOX,
+        TEE,
+        SOFTWARE,
+        UNKNOWN
+    }
+
     /**
      * Initializes the root key. Attempts to use StrongBox for maximum security.
      */
     fun init(context: Context) {
         generateRootKeyIfNeeded()
+    }
+
+    /**
+     * Inspects the root key to determine its actual security level.
+     */
+    fun getKeySecurityLevel(): KeySecurityLevel {
+        return try {
+            val key = getRootKey()
+            val factory = SecretKeyFactory.getInstance(key.algorithm, ANDROID_KEYSTORE)
+            val keyInfo = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
+            
+            when {
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P && keyInfo.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX -> {
+                    KeySecurityLevel.STRONGBOX
+                }
+                keyInfo.isInsideSecureHardware -> {
+                    KeySecurityLevel.TEE
+                }
+                else -> {
+                    KeySecurityLevel.SOFTWARE
+                }
+            }
+        } catch (e: Exception) {
+            PrivacyLogger.e("EncryptionManager", "Failed to determine key security level", e)
+            KeySecurityLevel.UNKNOWN
+        }
     }
 
     private fun generateRootKeyIfNeeded() {
@@ -37,12 +72,12 @@ object EncryptionManager {
             try {
                 // Attempt to generate key in StrongBox
                 generateAesKey(KEY_ALIAS, useStrongBox = true)
-                Log.i("EncryptionManager", "Root key generated in StrongBox")
+                PrivacyLogger.i("EncryptionManager", "Root key generated in StrongBox")
             } catch (e: Exception) {
                 // Fallback to TEE if StrongBox is unavailable
-                Log.w("EncryptionManager", "StrongBox unavailable, falling back to TEE: ${e.message}")
+                PrivacyLogger.w("EncryptionManager", "StrongBox unavailable, falling back to TEE: ${e.message}")
                 generateAesKey(KEY_ALIAS, useStrongBox = false)
-                Log.i("EncryptionManager", "Root key generated in TEE")
+                PrivacyLogger.i("EncryptionManager", "Root key generated in TEE")
             }
         }
     }

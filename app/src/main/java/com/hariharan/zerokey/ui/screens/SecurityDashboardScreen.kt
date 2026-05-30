@@ -19,9 +19,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hariharan.zerokey.security.EncryptionManager
+import com.hariharan.zerokey.security.SecurityHardening
 import com.hariharan.zerokey.securityanalytics.*
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
 
@@ -102,6 +105,10 @@ private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier, on
         item { SecurityScoreCard(score, grade) }
 
         item {
+            HardwareSecurityCard()
+        }
+
+        item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -130,6 +137,10 @@ private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier, on
             }
         }
 
+        item {
+            AccessibilityAuditCard()
+        }
+
         if (report.breachedCredentials.isNotEmpty()) {
             item { SectionHeader("Breach Alerts", Icons.Default.GppBad, Color(0xFFE74C3C)) }
             items(report.breachedCredentials) { item ->
@@ -148,6 +159,134 @@ private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier, on
             item { SectionHeader("Reused Passwords", Icons.Default.ContentCopy, Color(0xFFE67E22)) }
             items(report.duplicateGroups) { group ->
                 DuplicateGroupCard(group, onFixCredential)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HardwareSecurityCard() {
+    val securityLevel = remember { EncryptionManager.getKeySecurityLevel() }
+    
+    val (label, description, color, icon) = when (securityLevel) {
+        EncryptionManager.KeySecurityLevel.STRONGBOX -> Triple(
+            "StrongBox Verified",
+            "Maximum Security: Root key is protected by a dedicated hardware secure element.",
+            Color(0xFF4CAF50)
+        ).let { it.copy(fourth = Icons.Default.Shield) }
+        
+        EncryptionManager.KeySecurityLevel.TEE -> Triple(
+            "TEE Verified",
+            "High Security: Root key is stored in a Trusted Execution Environment (isolated from Android).",
+            Color(0xFF2196F3)
+        ).let { it.copy(fourth = Icons.Default.Security) }
+        
+        EncryptionManager.KeySecurityLevel.SOFTWARE -> Triple(
+            "Software Emulated",
+            "Limited Security: No secure hardware detected for root key. Rooted devices are at risk.",
+            Color(0xFFE74C3C)
+        ).let { it.copy(fourth = Icons.Default.Memory) }
+        
+        else -> Triple(
+            "Status Unknown",
+            "Unable to verify hardware security status of the root key.",
+            Color(0xFF7F8C8D)
+        ).let { it.copy(fourth = Icons.Default.Warning) }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon as androidx.compose.ui.graphics.vector.ImageVector,
+                contentDescription = null,
+                tint = color as Color,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(Modifier.width(20.dp))
+            Column {
+                Text(
+                    text = label as String,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = description as String,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                )
+            }
+        }
+    }
+}
+
+private fun <A, B, C> Triple<A, B, C>.copy(fourth: Any): Quadruple<A, B, C, Any> = Quadruple(first, second, third, fourth)
+data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
+@Composable
+private fun AccessibilityAuditCard() {
+    val context = LocalContext.current
+    val riskLevel = remember { SecurityHardening.getAccessibilityRiskLevel(context) }
+    val services = remember { SecurityHardening.getHighRiskServiceNames(context) }
+
+    val (label, color, description) = when (riskLevel) {
+        SecurityHardening.RiskLevel.HIGH -> Triple(
+            "Accessibility Warning",
+            Color(0xFFE74C3C),
+            "High-risk services active: ${services.joinToString(", ")}. These apps can read your screen content."
+        )
+        SecurityHardening.RiskLevel.MEDIUM -> Triple(
+            "Accessibility Audit",
+            Color(0xFFF39C12),
+            "Third-party services enabled. Ensure you trust these apps to prevent data capture."
+        )
+        SecurityHardening.RiskLevel.LOW -> Triple(
+            "Accessibility Safe",
+            Color(0xFF4CAF50),
+            "No high-risk third-party accessibility services detected."
+        )
+        else -> Triple(
+            "Status Unknown",
+            Color(0xFF7F8C8D),
+            "Unable to audit accessibility services."
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Visibility,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(Modifier.width(20.dp))
+            Column {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                )
             }
         }
     }

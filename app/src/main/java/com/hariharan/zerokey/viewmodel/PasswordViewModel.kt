@@ -1,7 +1,7 @@
 package com.hariharan.zerokey.viewmodel
 
 import android.content.Context
-import android.util.Log
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import android.widget.Toast
 import androidx.compose.runtime.*
 import androidx.lifecycle.ViewModel
@@ -38,7 +38,9 @@ class PasswordViewModel(
     private val syncManager: DeviceSyncManager? = null,
     private val shareManager: CredentialShareManager? = null,
     private val emergencyManager: EmergencyAccessManager? = null,
-    private val privacyModeManager: PrivacyModeManager? = null
+    private val privacyModeManager: PrivacyModeManager? = null,
+    private val deviceTrustManager: DeviceTrustManager? = null,
+    private var userId: String = "guest"
 ) : ViewModel() {
 
     private val securityEventManager = SecurityEventManager(auditLogManager)
@@ -73,6 +75,9 @@ class PasswordViewModel(
     var isOfflineMode by mutableStateOf(privacyModeManager?.isOfflineOnly() ?: false)
         private set
 
+    var trustedDevices = mutableStateListOf<DeviceTrustManager.DeviceInfo>()
+        private set
+
     init {
         // Initial minimal load
         loadInitialData()
@@ -98,6 +103,9 @@ class PasswordViewModel(
                 auditLogs.clear()
                 auditLogs.addAll(auditLogManager.getLogs())
             }
+
+            // Load trusted devices
+            refreshDeviceList()
         }
     }
 
@@ -157,9 +165,9 @@ class PasswordViewModel(
         isOfflineMode = enabled
         
         val message = if (enabled) {
-            "Stealth Protocol Activated: Vault is now air-gapped from all networks."
+            "Stealth Protocol ACTIVE: Vault is now air-gapped and local-only."
         } else {
-            "Stealth Protocol Deactivated: Cloud features restored."
+            "Stealth Protocol DISABLED: Cloud synchronization restored."
         }
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
@@ -206,8 +214,13 @@ class PasswordViewModel(
     ) {
         viewModelScope.launch {
             try {
-                repository.savePassword(service, username, password, notes)
-                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Added new password for $service")
+                val existing = repository.getPasswords().find { it.serviceName.equals(service, true) && it.username == username }
+                val isUpdate = existing != null
+                
+                repository.savePassword(service, username, password, notes, id = existing?.id ?: 0)
+                
+                val logMsg = if (isUpdate) "Updated password for $service" else "Added new password for $service"
+                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, logMsg)
 
                 allPasswords = repository.getPasswords()
                 filterPasswords()
@@ -223,12 +236,12 @@ class PasswordViewModel(
                 }
             } catch (e: IllegalStateException) {
                 // Vault is locked — getVaultKey() returned null
-                Log.e("PasswordViewModel", "Vault is locked, cannot save", e)
+                PrivacyLogger.e("PasswordViewModel", "Vault is locked, cannot save", e)
                 withContext(Dispatchers.Main) {
                     onError("Session expired. Please lock and unlock the app again.")
                 }
             } catch (e: Exception) {
-                Log.e("PasswordViewModel", "Failed to add password", e)
+                PrivacyLogger.e("PasswordViewModel", "Failed to add password", e)
                 withContext(Dispatchers.Main) {
                     onError("Failed to save. Please try again.")
                 }
@@ -317,6 +330,80 @@ class PasswordViewModel(
             val payload = Json.encodeToString(PasswordItem.serializer(), item)
             shareManager?.shareCredential(senderId, recipientId, payload, hmacKey)
             auditLogManager.log(AuditLogManager.EventType.PASSWORD_VIEWED, "Shared credential ${item.serviceName} with $recipientId")
+        }
+    }
+
+    fun changeMasterPassword(context: Context, newPassword: String, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try {
+                MasterPasswordManager.changeMasterPassword(context, newPassword.toCharArray())
+                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Master Password changed (Keys rotated)")
+                onComplete(true)
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Password change failed", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    fun rotateVaultKey(context: Context, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try {
+                repository.rotateVaultKey(context)
+                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Vault Key rotated (Full re-encryption)")
+                loadPasswords()
+                onComplete(true)
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Vault key rotation failed", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    /**
+     * Purges all decrypted data and cached items from the ViewModel.
+     */
+    fun lockVault() {
+        allPasswords.forEach { it.clearDecryptedData() }
+        allPasswords = emptyList()
+        passwords.clear()
+        auditLogs.clear()
+        healthReport = PasswordHealthAnalyzer.HealthReport(100, emptyList(), emptyList(), emptyList(), emptyList())
+        securityReport = null
+        recommendations.clear()
+        securityAlerts.clear()
+    }
+
+    fun setUserId(uid: String) {
+        userId = uid
+        refreshDeviceList()
+    }
+
+    fun refreshDeviceList() {
+        val manager = deviceTrustManager ?: return
+        viewModelScope.launch {
+            try {
+                val devices = manager.getTrustedDevices(userId)
+                trustedDevices.clear()
+                trustedDevices.addAll(devices)
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Failed to load device list", e)
+            }
+        }
+    }
+
+    fun revokeDevice(deviceId: String, onComplete: (Boolean) -> Unit) {
+        val manager = deviceTrustManager ?: return
+        viewModelScope.launch {
+            try {
+                manager.revokeDeviceTrust(userId, deviceId)
+                refreshDeviceList()
+                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Revoked trust for device: $deviceId")
+                onComplete(true)
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Failed to revoke device", e)
+                onComplete(false)
+            }
         }
     }
 }

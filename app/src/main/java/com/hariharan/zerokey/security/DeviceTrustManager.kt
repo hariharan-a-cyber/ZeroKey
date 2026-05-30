@@ -17,6 +17,13 @@ class DeviceTrustManager(
 
     private val COLLECTION_DEVICES = "devices"
 
+    data class DeviceInfo(
+        val deviceId: String,
+        val deviceName: String,
+        val lastSeen: Long,
+        val isTrusted: Boolean
+    )
+
     fun getCurrentDeviceId(): String {
         return Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
     }
@@ -71,5 +78,25 @@ class DeviceTrustManager(
             .document(deviceId)
             .update("trusted", false)
             .await()
+    }
+
+    /**
+     * Fetches all registered devices for the user.
+     */
+    suspend fun getTrustedDevices(userId: String): List<DeviceInfo> {
+        val snapshot = firestore.collection("users")
+            .document(userId)
+            .collection(COLLECTION_DEVICES)
+            .get()
+            .await()
+            
+        return snapshot.documents.map { doc ->
+            DeviceInfo(
+                deviceId = doc.id,
+                deviceName = doc.getString("deviceName") ?: "Unknown Device",
+                lastSeen = doc.getLong("lastSeen") ?: 0L,
+                isTrusted = doc.getBoolean("trusted") ?: false
+            )
+        }
     }
 }

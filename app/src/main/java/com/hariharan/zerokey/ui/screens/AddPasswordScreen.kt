@@ -100,10 +100,10 @@ fun AddPasswordScreen(
             ) {
                 AddTransparentTextField(
                     value = serviceName,
-                    onValueChange = { serviceName = it.uppercase() },
+                    onValueChange = { serviceName = it },
                     label = "Service Name",
-                    placeholder = "E.G. GOOGLE, GITHUB",
-                    capitalization = KeyboardCapitalization.Characters
+                    placeholder = "e.g. Google, Github",
+                    capitalization = KeyboardCapitalization.Words
                 )
 
                 AddTransparentTextField(
