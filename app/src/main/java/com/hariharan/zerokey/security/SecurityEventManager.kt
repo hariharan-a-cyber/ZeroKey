@@ -1,6 +1,6 @@
 package com.hariharan.zerokey.security
 
-import com.hariharan.zerokey.data.database.AuditLogEntity
+import com.hariharan.zerokey.core.database.AuditLogEntity
 import com.hariharan.zerokey.security.AuditLogManager.EventType
 
 /**

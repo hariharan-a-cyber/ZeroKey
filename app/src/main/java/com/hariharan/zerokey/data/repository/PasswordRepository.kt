@@ -2,18 +2,20 @@ package com.hariharan.zerokey.data.repository
 
 import android.content.Context
 import android.util.Base64
-import com.hariharan.zerokey.data.database.PasswordDao
-import com.hariharan.zerokey.data.database.PasswordEntity
-import com.hariharan.zerokey.data.database.VaultMetadata
-import com.hariharan.zerokey.data.database.VaultMetadataDao
+import com.hariharan.zerokey.core.database.PasswordDao
+import com.hariharan.zerokey.core.database.PasswordEntity
+import com.hariharan.zerokey.core.database.VaultMetadata
+import com.hariharan.zerokey.core.database.VaultMetadataDao
 import com.hariharan.zerokey.data.model.PasswordItem
-import com.hariharan.zerokey.security.EncryptedData
-import com.hariharan.zerokey.security.EncryptionManager
-import com.hariharan.zerokey.security.MasterPasswordManager
+import com.hariharan.zerokey.core.crypto.EncryptedData
+import com.hariharan.zerokey.core.crypto.EncryptionManager
+import com.hariharan.zerokey.core.security.MasterPasswordManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.crypto.spec.SecretKeySpec
 import java.security.SecureRandom
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Phase 2: Vault Storage System.
@@ -21,13 +23,24 @@ import java.security.SecureRandom
  * Refactored to use Envelope Encryption and Associated Authenticated Data (AAD).
  * Performance: Uses Lazy Decryption via PasswordItem.
  */
-class PasswordRepository(
+@Singleton
+class PasswordRepository @Inject constructor(
     private val passwordDao: PasswordDao,
-    private val vaultMetadataDao: VaultMetadataDao? = null
+    private val vaultMetadataDao: VaultMetadataDao? = null,
+    private val masterPasswordManager: MasterPasswordManager,
+    private val encryptionManager: EncryptionManager
 ) {
 
     suspend fun getPasswords(): List<PasswordItem> = withContext(Dispatchers.IO) {
-        passwordDao.getAllPasswords().map { PasswordItem(id = it.id, encryptedEntity = it, isFavorite = it.isFavorite) }
+        passwordDao.getAllPasswords().map { 
+            PasswordItem(
+                id = it.id, 
+                encryptedEntity = it, 
+                isFavorite = it.isFavorite, 
+                masterPasswordManager = masterPasswordManager, 
+                encryptionManager = encryptionManager
+            ) 
+        }
     }
 
     suspend fun getAllEntities(): List<PasswordEntity> = withContext(Dispatchers.IO) {
@@ -43,7 +56,15 @@ class PasswordRepository(
     }
 
     suspend fun getPasswordById(id: Int): PasswordItem? = withContext(Dispatchers.IO) {
-        passwordDao.getPasswordById(id)?.let { PasswordItem(id = it.id, encryptedEntity = it, isFavorite = it.isFavorite) }
+        passwordDao.getPasswordById(id)?.let { 
+            PasswordItem(
+                id = it.id, 
+                encryptedEntity = it, 
+                isFavorite = it.isFavorite, 
+                masterPasswordManager = masterPasswordManager, 
+                encryptionManager = encryptionManager
+            ) 
+        }
     }
 
     suspend fun updateFavorite(id: Int, isFavorite: Boolean) = withContext(Dispatchers.IO) {
@@ -104,7 +125,7 @@ class PasswordRepository(
     }
 
     suspend fun savePassword(service: String, username: String, password: String, notes: String? = null, id: Int = 0) = withContext(Dispatchers.IO) {
-        val vaultKey = MasterPasswordManager.getVaultKey() 
+        val vaultKey = masterPasswordManager.getVaultKey() 
             ?: throw IllegalStateException("Vault must be unlocked before saving passwords")
 
         // If updating, preserve original creation time and favorite status
@@ -123,10 +144,10 @@ class PasswordRepository(
         // This prevents "Cut-and-Paste" attacks and future migration ambiguity.
         val aad = "v$version|s$schemaVersion|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
 
-        val serviceNameEnc = EncryptionManager.encryptWithKey(service.toByteArray(), vaultKey, aad)
-        val usernameEnc = EncryptionManager.encryptWithKey(username.toByteArray(), vaultKey, aad)
-        val passwordEnc = EncryptionManager.encryptWithKey(password.toByteArray(), vaultKey, aad)
-        val notesEnc = notes?.let { EncryptionManager.encryptWithKey(it.toByteArray(), vaultKey, aad) }
+        val serviceNameEnc = encryptionManager.encryptWithKey(service.toByteArray(), vaultKey, aad)
+        val usernameEnc = encryptionManager.encryptWithKey(username.toByteArray(), vaultKey, aad)
+        val passwordEnc = encryptionManager.encryptWithKey(password.toByteArray(), vaultKey, aad)
+        val notesEnc = notes?.let { encryptionManager.encryptWithKey(it.toByteArray(), vaultKey, aad) }
 
         val entity = PasswordEntity(
             id = id,
@@ -153,7 +174,7 @@ class PasswordRepository(
      * Use for emergency recovery or compromised device scenarios.
      */
     suspend fun rotateVaultKey(context: Context) = withContext(Dispatchers.IO) {
-        val oldVaultKey = MasterPasswordManager.getVaultKey() 
+        val oldVaultKey = masterPasswordManager.getVaultKey()
             ?: throw IllegalStateException("Vault must be unlocked")
         
         // 1. Generate NEW random 256-bit Vault Key
@@ -174,9 +195,9 @@ class PasswordRepository(
             saveWithSpecificKey(service, username, password, notes, item.id, newVaultKey, item.toEntity())
         }
 
-        // 3. Update MasterPasswordManager to use and persist the new key
-        val wrappedNewKey = EncryptionManager.encryptWithKey(rawNewKey, MasterPasswordManager.getSessionKey()!!)
-        MasterPasswordManager.importVaultKey(context, wrappedNewKey)
+        // 3. Update masterPasswordManager to use and persist the new key
+        val wrappedNewKey = encryptionManager.encryptWithKey(rawNewKey, masterPasswordManager.getSessionKey()!!)
+        masterPasswordManager.importVaultKey(context, wrappedNewKey)
         
         // 4. Reset Epoch for a clean cryptographic break
         val newEpoch = java.util.UUID.randomUUID().toString()
@@ -205,10 +226,10 @@ class PasswordRepository(
     ) {
         val aad = "v${existing.encryptionVersion}|s${existing.schemaVersion}|${existing.recordUid}|${existing.createdAt}".toByteArray(Charsets.UTF_8)
         
-        val serviceNameEnc = EncryptionManager.encryptWithKey(service.toByteArray(), key, aad)
-        val usernameEnc = EncryptionManager.encryptWithKey(username.toByteArray(), key, aad)
-        val passwordEnc = EncryptionManager.encryptWithKey(password.toByteArray(), key, aad)
-        val notesEnc = notes?.let { EncryptionManager.encryptWithKey(it.toByteArray(), key, aad) }
+        val serviceNameEnc = encryptionManager.encryptWithKey(service.toByteArray(), key, aad)
+        val usernameEnc = encryptionManager.encryptWithKey(username.toByteArray(), key, aad)
+        val passwordEnc = encryptionManager.encryptWithKey(password.toByteArray(), key, aad)
+        val notesEnc = notes?.let { encryptionManager.encryptWithKey(it.toByteArray(), key, aad) }
 
         val entity = existing.copy(
             encryptedServiceName = Base64.encodeToString(serviceNameEnc.cipherText, Base64.NO_WRAP),

@@ -1,9 +1,9 @@
 package com.hariharan.zerokey.data.model
 
-import com.hariharan.zerokey.data.database.PasswordEntity
-import com.hariharan.zerokey.security.EncryptedData
-import com.hariharan.zerokey.security.EncryptionManager
-import com.hariharan.zerokey.security.MasterPasswordManager
+import com.hariharan.zerokey.core.database.PasswordEntity
+import com.hariharan.zerokey.core.crypto.EncryptedData
+import com.hariharan.zerokey.core.crypto.EncryptionManager
+import com.hariharan.zerokey.core.security.MasterPasswordManager
 import com.hariharan.zerokey.core.common.PrivacyLogger
 import android.util.Base64
 import kotlinx.serialization.Serializable
@@ -24,7 +24,11 @@ class PasswordItem(
     private val initialPassword: String = "",
     private val initialNotes: String? = null,
     val isFavorite: Boolean = false,
-    val createdAt: Long = encryptedEntity?.createdAt ?: System.currentTimeMillis()
+    val createdAt: Long = encryptedEntity?.createdAt ?: System.currentTimeMillis(),
+    @Transient
+    private val masterPasswordManager: MasterPasswordManager? = null,
+    @Transient
+    private val encryptionManager: EncryptionManager? = null
 ) {
     // Decryption cache
     @Transient
@@ -82,7 +86,7 @@ class PasswordItem(
     fun getPasswordAsBytes(): ByteArray {
         if (encryptedEntity == null) return initialPassword.toByteArray(Charsets.UTF_8)
         
-        val vaultKey = MasterPasswordManager.getVaultKey() 
+        val vaultKey = masterPasswordManager?.getVaultKey() 
             ?: return ByteArray(0)
         
         val version = encryptedEntity.encryptionVersion
@@ -101,14 +105,17 @@ class PasswordItem(
             Base64.decode(encryptedEntity.passwordIv, Base64.NO_WRAP)
         )
         
-        return EncryptionManager.decryptWithKey(data, vaultKey, aad)
+        return encryptionManager?.decryptWithKey(data, vaultKey, aad) ?: ByteArray(0)
     }
 
     val notes: String?
         get() {
-            if (_notes == null && encryptedEntity != null && encryptedEntity.encryptedNotes != null) {
+            val entity = encryptedEntity
+            val encryptedNotes = entity?.encryptedNotes
+            val notesIv = entity?.notesIv
+            if (_notes == null && entity != null && encryptedNotes != null && notesIv != null) {
                 _notes = try {
-                    decryptField(encryptedEntity.encryptedNotes, encryptedEntity.notesIv!!, encryptedEntity.createdAt)
+                    decryptField(encryptedNotes, notesIv, entity.createdAt)
                 } catch (e: Exception) {
                     PrivacyLogger.e("PasswordItem", "Decryption failed for notes", e)
                     null
@@ -132,7 +139,7 @@ class PasswordItem(
     }
 
     private fun decryptField(ciphertext: String, iv: String, createdAt: Long): String {
-        val vaultKey = MasterPasswordManager.getVaultKey() 
+        val vaultKey = masterPasswordManager?.getVaultKey() 
             ?: return "[Vault Locked]"
         
         val version = encryptedEntity?.encryptionVersion ?: 0
@@ -148,7 +155,7 @@ class PasswordItem(
         val data = EncryptedData(Base64.decode(ciphertext, Base64.NO_WRAP), Base64.decode(iv, Base64.NO_WRAP))
         
         return try {
-            EncryptionManager.decryptWithKey(data, vaultKey, aad).decodeToString()
+            encryptionManager?.decryptWithKey(data, vaultKey, aad)?.decodeToString() ?: "[Decryption Error]"
         } catch (e: Exception) {
             PrivacyLogger.e("PasswordItem", "Decryption failed for v$version|s$sVersion|$recordUid|$createdAt", e)
             "[Decryption Error]"

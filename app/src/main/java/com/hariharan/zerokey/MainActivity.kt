@@ -27,29 +27,53 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.hariharan.zerokey.ui.navigation.Screen
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.PersistentCacheSettings
-import com.hariharan.zerokey.data.database.PasswordDatabase
+import com.hariharan.zerokey.core.database.PasswordDatabase
 import com.hariharan.zerokey.data.repository.PasswordRepository
 import com.hariharan.zerokey.data.sync.VaultSerializer
 import com.hariharan.zerokey.data.backup.VaultBackupManager
 import com.hariharan.zerokey.security.*
+import com.hariharan.zerokey.core.security.*
+import com.hariharan.zerokey.core.crypto.*
 import com.hariharan.zerokey.sync.*
 import com.hariharan.zerokey.sharing.*
 import com.hariharan.zerokey.emergency.*
 import com.hariharan.zerokey.ui.screens.*
 import com.hariharan.zerokey.ui.theme.ZeroKeyTheme
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
-import com.hariharan.zerokey.viewmodel.PasswordViewModelFactory
 import com.hariharan.zerokey.viewmodel.SyncViewModel
-import com.hariharan.zerokey.utils.PrivacyLogger
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+
+@AndroidEntryPoint
 class MainActivity : FragmentActivity() {
+
+    @Inject lateinit var masterPasswordManager: MasterPasswordManager
+    @Inject lateinit var encryptionManager: EncryptionManager
+    @Inject lateinit var hmacEngine: HmacEngine
+    @Inject lateinit var keyDerivationManager: KeyDerivationManager
+    @Inject lateinit var breachMonitor: BreachMonitor
+    @Inject lateinit var authAttemptManager: AuthAttemptManager
+    @Inject lateinit var passwordDatabase: PasswordDatabase
+    @Inject lateinit var vaultRepository: PasswordRepository
+    @Inject lateinit var auditLogManager: AuditLogManager
+    @Inject lateinit var deviceSyncManager: DeviceSyncManager
+    @Inject lateinit var credentialShareManager: CredentialShareManager
+    @Inject lateinit var deviceTrustManager: DeviceTrustManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,7 +89,6 @@ class MainActivity : FragmentActivity() {
         )
         
         enableEdgeToEdge()
-        val authAttemptManager = AuthAttemptManager(this)
         val authenticator = FirebaseAuthenticator()
 
         setContent {
@@ -73,12 +96,12 @@ class MainActivity : FragmentActivity() {
                 var isAuthenticated by remember { mutableStateOf(authenticator.isAuthenticated) }
                 // Use a key-based state that we can refresh on resume
                 var vaultCheckKey by remember { mutableStateOf(0) }
-                val isVaultUnlocked = remember(vaultCheckKey) { MasterPasswordManager.isUnlocked() }
+                val isVaultUnlocked = remember(vaultCheckKey) { masterPasswordManager.isUnlocked() }
                 
                 // Security Hardening: Check device integrity
                 val context = LocalContext.current
                 val securityStatus = remember { SecurityHardening.checkDeviceSecurity(context) }
-                val keySecurity = remember { EncryptionManager.getKeySecurityLevel() }
+                val keySecurity = remember { encryptionManager.getKeySecurityLevel() }
                 
                 var showSecurityWarning by remember { 
                     mutableStateOf(securityStatus.isCompromised || 
@@ -123,9 +146,10 @@ class MainActivity : FragmentActivity() {
                     ExitBackHandler()
                     AuthScreen(
                         authenticator = authenticator,
+                        masterPasswordManager = masterPasswordManager,
                         onAuthSuccess = { 
                             isAuthenticated = true
-                            MasterPasswordManager.authorizeAutofill()
+                            masterPasswordManager.authorizeAutofill()
                             vaultCheckKey++
                         }
                     )
@@ -160,58 +184,10 @@ class MainActivity : FragmentActivity() {
 
     @Composable
     fun VaultContent(authAttemptManager: AuthAttemptManager, authenticator: FirebaseAuthenticator, onRefreshVault: () -> Unit) {
-        val database = PasswordDatabase.getDatabase(applicationContext)
-        val repository = PasswordRepository(database.passwordDao(), database.vaultMetadataDao())
-        val auditLogManager = AuditLogManager(database.auditLogDao())
-        val backupManager = VaultBackupManager(repository, VaultSerializer())
+        val viewModel: PasswordViewModel = hiltViewModel()
+        val syncViewModel: SyncViewModel = hiltViewModel()
         
-        // --- Hard Reset Firestore Settings ---
-        val firestore = FirebaseFirestore.getInstance()
-        val settings = FirebaseFirestoreSettings.Builder()
-            .setLocalCacheSettings(PersistentCacheSettings.newBuilder().build())
-            .build()
-        firestore.firestoreSettings = settings
-
-        val cryptoEngine = CryptoEngine()
-        val hmacEngine = HmacEngine()
-        val conflictResolver = VaultConflictResolver(cryptoEngine, hmacEngine)
-        val deviceTrustManager = DeviceTrustManager(applicationContext, firestore)
-        
-        val syncManager = DeviceSyncManager(firestore, cryptoEngine, hmacEngine, conflictResolver, deviceTrustManager)
-        val shareManager = CredentialShareManager(firestore, hmacEngine)
-        
-        // Using fully qualified name to avoid ambiguity between security and emergency packages
-        val emergencyManager = com.hariharan.zerokey.emergency.EmergencyAccessManager(
-            firestore, 
-            cryptoEngine, 
-            object : EmergencyNotificationService {
-                override suspend fun notifyOwnerOfRequest(ownerId: String, contactEmail: String, cancelDeadline: Long) {}
-                override suspend fun notifyRequestCancelled(contactEmail: String) {}
-                override suspend fun notifyAccessGranted(ownerId: String, contactEmail: String) {}
-            }
-        )
-
-        val viewModel: PasswordViewModel = viewModel(
-            factory = PasswordViewModelFactory(
-                repository = repository,
-                auditLogManager = auditLogManager,
-                backupManager = backupManager,
-                syncManager = syncManager,
-                shareManager = shareManager,
-                emergencyManager = emergencyManager,
-                deviceTrustManager = deviceTrustManager
-            )
-        )
-
-        // SyncViewModel integration
-        val syncViewModel: SyncViewModel = viewModel(
-            factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                    return SyncViewModel(application, repository, syncManager) as T
-                }
-            }
-        )
+        val deviceTrustManager = this.deviceTrustManager
 
         var isLocked by remember { mutableStateOf(true) }
         val lifecycleOwner = LocalLifecycleOwner.current
@@ -225,8 +201,8 @@ class MainActivity : FragmentActivity() {
                         isLocked = true
                         
                         // Aggressive key purging only if user policy allows it
-                        if (!isChangingConfigurations && MasterPasswordManager.shouldLockOnExit(applicationContext)) {
-                            MasterPasswordManager.lockVault()
+                        if (!isChangingConfigurations && masterPasswordManager.shouldLockOnExit(applicationContext)) {
+                            masterPasswordManager.lockVault()
                             viewModel.lockVault()
                         }
                         onRefreshVault()
@@ -235,9 +211,9 @@ class MainActivity : FragmentActivity() {
                         // Security Hardening: Active Revocation Check
                         scope.launch {
                             val uid = authenticator.uid ?: "guest"
-                            if (MasterPasswordManager.isUnlocked() && !deviceTrustManager.isCurrentDeviceTrusted(uid)) {
+                            if (masterPasswordManager.isUnlocked() && !deviceTrustManager.isCurrentDeviceTrusted(uid)) {
                                 withContext(Dispatchers.Main) {
-                                    MasterPasswordManager.lockVault()
+                                    masterPasswordManager.lockVault()
                                     viewModel.lockVault()
                                     onRefreshVault()
                                     Toast.makeText(applicationContext, "Access Revoked: This device is no longer trusted.", Toast.LENGTH_LONG).show()
@@ -267,13 +243,13 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(uid) {
                 viewModel.setUserId(uid)
             }
-            ZeroKeyApp(viewModel, syncViewModel, uid)
+            ZeroKeyApp(viewModel, syncViewModel, uid, masterPasswordManager)
         }
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        MasterPasswordManager.onTrimMemory(level)
+        masterPasswordManager.onTrimMemory(level)
     }
 }
 
@@ -377,10 +353,10 @@ fun BiometricLockScreen(authManager: AuthAttemptManager, onAuthenticated: () -> 
 fun ZeroKeyApp(
     viewModel: PasswordViewModel, 
     syncViewModel: SyncViewModel,
-    userId: String
+    userId: String,
+    masterPasswordManager: MasterPasswordManager
 ) {
-    var currentScreen by remember { mutableStateOf("vault") }
-    var selectedItemId by remember { mutableStateOf<Int?>(null) }
+    val navController = rememberNavController()
     var generatedPasswordToUse by remember { mutableStateOf<String?>(null) }
     
     val context = LocalContext.current
@@ -388,14 +364,9 @@ fun ZeroKeyApp(
 
     // Custom BackHandler for main app navigation
     BackHandler {
-        if (currentScreen != "vault") {
-            // Navigate back to Home (Vault) if in any other screen/tab
-            if (currentScreen == "password_details") {
-                currentScreen = "security_dashboard"
-            } else {
-                currentScreen = "vault"
-            }
-            backPressedTime = 0L // Reset exit timer when navigating back to vault
+        if (navController.previousBackStackEntry != null) {
+            navController.popBackStack()
+            backPressedTime = 0L
         } else {
             // Double-back to exit logic if already on Home screen
             val now = System.currentTimeMillis()
@@ -408,75 +379,101 @@ fun ZeroKeyApp(
         }
     }
 
-    when (currentScreen) {
-        "vault" -> VaultScreen(
-            viewModel = viewModel,
-            onAddClick = { currentScreen = "add_password" },
-            onSecurityActivityClick = { currentScreen = "security_activity" },
-            onPasswordHealthClick = { currentScreen = "password_health" },
-            onSecurityDashboardClick = { currentScreen = "security_dashboard" },
-            onSharingClick = { currentScreen = "credential_sharing" },
-            onSyncClick = { currentScreen = "cloud_sync" },
-            onSettingsClick = { currentScreen = "settings" }
-        )
-        "add_password" -> AddPasswordScreen(
-            viewModel = viewModel,
-            initialPassword = generatedPasswordToUse ?: "",
-            onBack = { 
-                currentScreen = "vault"
-                generatedPasswordToUse = null
-            },
-            onGenerateClick = { currentScreen = "generator" }
-        )
-        "security_activity" -> SecurityActivityScreen(
-            viewModel = viewModel,
-            onBack = { currentScreen = "vault" }
-        )
-        "password_health" -> PasswordHealthScreen(
-            viewModel = viewModel,
-            onBack = { currentScreen = "vault" }
-        )
-        "generator" -> PasswordGeneratorScreen(
-            onBack = { currentScreen = "add_password" },
-            onUsePassword = { 
-                generatedPasswordToUse = it
-                currentScreen = "add_password"
-            }
-        )
-        "security_dashboard" -> SecurityDashboardScreen(
-            viewModel = viewModel,
-            onBack = { currentScreen = "vault" },
-            onFixCredential = { id ->
-                selectedItemId = id
-                currentScreen = "password_details"
-            }
-        )
-        "password_details" -> selectedItemId?.let { id ->
-            PasswordDetailScreen(
-                itemId = id,
+    NavHost(navController = navController, startDestination = Screen.Vault.route) {
+        composable(Screen.Vault.route) {
+            VaultScreen(
                 viewModel = viewModel,
-                onBack = { currentScreen = "security_dashboard" },
-                onDeleted = { currentScreen = "security_dashboard" }
+                onAddClick = { navController.navigate(Screen.AddPassword.route) },
+                onSecurityActivityClick = { navController.navigate(Screen.SecurityActivity.route) },
+                onPasswordHealthClick = { navController.navigate(Screen.PasswordHealth.route) },
+                onSecurityDashboardClick = { navController.navigate(Screen.SecurityDashboard.route) },
+                onSharingClick = { navController.navigate(Screen.CredentialSharing.route) },
+                onSyncClick = { navController.navigate(Screen.CloudSync.route) },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) }
             )
         }
-        "credential_sharing" -> CredentialSharingScreen(
-            viewModel = viewModel,
-            onBack = { currentScreen = "vault" },
-            userId = userId
-        )
-        "cloud_sync" -> SyncScreen(
-            viewModel = syncViewModel,
-            onBack = { currentScreen = "vault" },
-            userId = userId
-        )
-        "settings" -> SettingsScreen(
-            viewModel = viewModel,
-            onBack = { currentScreen = "vault" },
-            onManageDevices = { currentScreen = "device_management" }
-        )
-        "device_management" -> DeviceManagementScreen(
-            viewModel = viewModel,
-            onBack = { currentScreen = "settings" }
-        )
+        composable(Screen.AddPassword.route) {
+            AddPasswordScreen(
+                viewModel = viewModel,
+                initialPassword = generatedPasswordToUse ?: "",
+                onBack = { 
+                    navController.popBackStack()
+                    generatedPasswordToUse = null
+                },
+                onGenerateClick = { navController.navigate(Screen.Generator.route) }
+            )
+        }
+        composable(Screen.SecurityActivity.route) {
+            SecurityActivityScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.PasswordHealth.route) {
+            PasswordHealthScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.Generator.route) {
+            PasswordGeneratorScreen(
+                onBack = { navController.popBackStack() },
+                onUsePassword = { 
+                    generatedPasswordToUse = it
+                    navController.popBackStack()
+                }
+            )
+        }
+        composable(Screen.SecurityDashboard.route) {
+            SecurityDashboardScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                onFixCredential = { id ->
+                    navController.navigate(Screen.PasswordDetail.createRoute(id))
+                }
+            )
+        }
+        composable(
+            route = Screen.PasswordDetail.route,
+            arguments = listOf(navArgument("id") { type = NavType.IntType })
+        ) { backStackEntry ->
+            val id = backStackEntry.arguments?.getInt("id")
+            if (id != null) {
+                PasswordDetailScreen(
+                    itemId = id,
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onDeleted = { navController.popBackStack() }
+                )
+            }
+        }
+        composable(Screen.CredentialSharing.route) {
+            CredentialSharingScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                userId = userId
+            )
+        }
+        composable(Screen.CloudSync.route) {
+            SyncScreen(
+                viewModel = syncViewModel,
+                onBack = { navController.popBackStack() },
+                userId = userId
+            )
+        }
+        composable(Screen.Settings.route) {
+            SettingsScreen(
+                viewModel = viewModel,
+                masterPasswordManager = masterPasswordManager,
+                onBack = { navController.popBackStack() },
+                onManageDevices = { navController.navigate(Screen.DeviceManagement.route) }
+            )
+        }
+        composable(Screen.DeviceManagement.route) {
+            DeviceManagementScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
     }
 }

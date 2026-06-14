@@ -3,24 +3,29 @@ package com.hariharan.zerokey.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.hariharan.zerokey.security.MasterPasswordManager
-import com.hariharan.zerokey.security.EncryptedData
+import com.hariharan.zerokey.core.security.MasterPasswordManager
+import com.hariharan.zerokey.core.crypto.EncryptedData
 import com.hariharan.zerokey.sync.DeviceSyncManager
 import com.hariharan.zerokey.sync.PullResult
 import com.hariharan.zerokey.sync.SyncResult
 import com.hariharan.zerokey.data.repository.PasswordRepository
-import com.hariharan.zerokey.data.database.PasswordEntity
-import com.hariharan.zerokey.utils.PrivacyLogger
+import com.hariharan.zerokey.core.database.PasswordEntity
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
 
-class SyncViewModel(
-    application: Application,
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+
+@HiltViewModel
+class SyncViewModel @Inject constructor(
+    application: android.app.Application,
     private val repository: PasswordRepository,
-    private val syncManager: DeviceSyncManager
+    private val syncManager: DeviceSyncManager,
+    private val masterPasswordManager: MasterPasswordManager
 ) : AndroidViewModel(application) {
 
     private val _syncState = MutableStateFlow<SyncStatus>(SyncStatus.Idle)
@@ -31,7 +36,7 @@ class SyncViewModel(
             _syncState.value = SyncStatus.Syncing
             
             try {
-                val vaultKey = MasterPasswordManager.getVaultKey() 
+                val vaultKey = masterPasswordManager.getVaultKey() 
                     ?: throw IllegalStateException("Vault is locked")
                 
                 val encryptionKey = vaultKey.encoded
@@ -71,7 +76,7 @@ class SyncViewModel(
                             plaintextVaultJson = localJson,
                             encryptionKey = encryptionKey,
                             hmacKey = hmacKey,
-                            wrappedKey = MasterPasswordManager.getWrappedVaultKey(),
+                            wrappedKey = masterPasswordManager.getWrappedVaultKey(),
                             vaultEpochId = localEpochId,
                             previousSnapshotHmac = null
                         )
@@ -90,7 +95,7 @@ class SyncViewModel(
                                     cipherText = android.util.Base64.decode(blob.wrappedVaultKey, android.util.Base64.NO_WRAP),
                                     iv = android.util.Base64.decode(blob.wrappedVaultKeyIv, android.util.Base64.NO_WRAP)
                                 )
-                                MasterPasswordManager.importVaultKey(getApplication(), wrapped)
+                                masterPasswordManager.importVaultKey(getApplication(), wrapped)
                                 performSync(userId)
                                 return@launch
                             } catch (e: Exception) {
@@ -115,7 +120,7 @@ class SyncViewModel(
     private fun handleSyncFailure(reason: String) {
         PrivacyLogger.e("SyncViewModel", "Sync failed: ${PrivacyLogger.sanitizeError(reason)}")
         if (reason.contains("DEVICE_REVOKED", ignoreCase = true)) {
-            MasterPasswordManager.lockVault()
+            masterPasswordManager.lockVault()
             _syncState.value = SyncStatus.Error("Access Revoked: Device untrusted.", false)
         } else if (reason.contains("Rollback", ignoreCase = true) || 
                    reason.contains("Epoch", ignoreCase = true) || 
@@ -142,7 +147,7 @@ class SyncViewModel(
         viewModelScope.launch {
             _syncState.value = SyncStatus.Syncing
             try {
-                val vaultKey = MasterPasswordManager.getVaultKey() ?: throw IllegalStateException("Vault is locked")
+                val vaultKey = masterPasswordManager.getVaultKey() ?: throw IllegalStateException("Vault is locked")
                 val localPasswords = repository.getPasswords()
                 val localJson = Json.encodeToString(ListSerializer(PasswordEntity.serializer()), localPasswords.map { it.toEntity() })
                 
@@ -151,7 +156,7 @@ class SyncViewModel(
                     plaintextVaultJson = localJson,
                     encryptionKey = vaultKey.encoded,
                     hmacKey = vaultKey.encoded,
-                    wrappedKey = MasterPasswordManager.getWrappedVaultKey(),
+                    wrappedKey = masterPasswordManager.getWrappedVaultKey(),
                     vaultEpochId = repository.getVaultEpochId(),
                     previousSnapshotHmac = repository.getLastKnownHmac()
                 )

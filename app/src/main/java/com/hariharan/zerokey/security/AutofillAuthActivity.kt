@@ -12,16 +12,25 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.hariharan.zerokey.R
-import com.hariharan.zerokey.data.database.PasswordDatabase
+import com.hariharan.zerokey.core.database.PasswordDatabase
 import com.hariharan.zerokey.data.repository.PasswordRepository
-import com.hariharan.zerokey.utils.SensitiveDataManager
+import com.hariharan.zerokey.core.common.SensitiveDataManager
 import kotlinx.coroutines.runBlocking
+
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+import com.hariharan.zerokey.core.crypto.EncryptionManager
+import com.hariharan.zerokey.core.security.MasterPasswordManager
 
 /**
  * Invisible activity that handles Biometric Authentication for Autofill.
  * Decrypts the password ONLY after successful authentication.
  */
+@AndroidEntryPoint
 class AutofillAuthActivity : FragmentActivity() {
+
+    @Inject lateinit var masterPasswordManager: MasterPasswordManager
+    @Inject lateinit var encryptionManager: EncryptionManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,9 +64,13 @@ class AutofillAuthActivity : FragmentActivity() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
                     
-                    // Decrypt the password now that the user is authenticated
                     val database = PasswordDatabase.getDatabase(this@AutofillAuthActivity)
-                    val repository = PasswordRepository(database.passwordDao())
+                    val repository = PasswordRepository(
+                        database.passwordDao(), 
+                        database.vaultMetadataDao(),
+                        masterPasswordManager,
+                        encryptionManager
+                    )
                     
                     val password = runBlocking {
                         repository.getPasswordById(itemId)?.password

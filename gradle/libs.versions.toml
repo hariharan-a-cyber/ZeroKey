@@ -9,7 +9,7 @@ activityCompose = "1.9.3"
 kotlin = "2.1.0"
 ksp = "2.1.0-1.0.29"
 composeBom = "2024.10.00"
-securityCrypto = "1.1.0-alpha06"
+securityCrypto = "1.0.0"
 biometric = "1.1.0"
 room = "2.6.1"
 navigationCompose = "2.7.7"
@@ -22,6 +22,10 @@ googleServices = "4.4.4"
 ktor = "3.0.1"
 argon2kt = "1.6.0"
 tink = "1.15.0"
+hilt = "2.55"
+hiltNavigationCompose = "1.2.0"
+mockk = "1.13.10"
+coroutinesTest = "1.8.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -57,6 +61,11 @@ ktor-client-android = { group = "io.ktor", name = "ktor-client-android", version
 ktor-client-logging = { group = "io.ktor", name = "ktor-client-logging", version.ref = "ktor" }
 argon2kt = { group = "com.lambdapioneer.argon2kt", name = "argon2kt", version.ref = "argon2kt" }
 tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
+hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutinesTest" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -68,3 +77,4 @@ kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 androidx-room = { id = "androidx.room", version.ref = "room" }
+hilt-android = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }

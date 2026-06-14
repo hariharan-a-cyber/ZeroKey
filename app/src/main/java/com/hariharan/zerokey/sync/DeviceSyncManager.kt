@@ -3,11 +3,11 @@ package com.hariharan.zerokey.sync
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
-import com.hariharan.zerokey.security.CryptoEngine
+import com.hariharan.zerokey.core.crypto.CryptoEngine
 import com.hariharan.zerokey.core.common.PrivacyLogger
 import com.hariharan.zerokey.security.DeviceTrustManager
-import com.hariharan.zerokey.security.EncryptedData
-import com.hariharan.zerokey.security.HmacEngine
+import com.hariharan.zerokey.core.crypto.EncryptedData
+import com.hariharan.zerokey.core.crypto.HmacEngine
 import kotlinx.coroutines.tasks.await
 
 /**

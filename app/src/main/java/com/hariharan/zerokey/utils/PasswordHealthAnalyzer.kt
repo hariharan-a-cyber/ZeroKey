@@ -1,7 +1,7 @@
 package com.hariharan.zerokey.utils
 
 import com.hariharan.zerokey.data.model.PasswordItem
-import com.hariharan.zerokey.security.BreachMonitor
+import com.hariharan.zerokey.core.security.BreachMonitor
 
 /**
  * Analyzes the user's vault for security weaknesses.
@@ -16,7 +16,7 @@ object PasswordHealthAnalyzer {
         val compromisedPasswords: List<PasswordItem>
     )
 
-    suspend fun analyze(passwords: List<PasswordItem>): HealthReport {
+    suspend fun analyze(passwords: List<PasswordItem>, breachMonitor: BreachMonitor): HealthReport {
         if (passwords.isEmpty()) {
             return HealthReport(100, emptyList(), emptyList(), emptyList(), emptyList())
         }
@@ -33,9 +33,9 @@ object PasswordHealthAnalyzer {
             item.createdAt < sixMonthsAgo
         }
         
-        // Query BreachMonitor for each password
+        // Query breachMonitor for each password
         val compromised = passwords.filter { item ->
-            BreachMonitor.checkBreach(item.password.toCharArray())
+            breachMonitor.checkBreach(item.password.toCharArray())
         }
 
         // Calculate score

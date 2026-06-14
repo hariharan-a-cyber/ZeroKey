@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Base64
 import com.hariharan.zerokey.data.repository.PasswordRepository
 import com.hariharan.zerokey.data.sync.VaultSerializer
-import com.hariharan.zerokey.security.EncryptedVault
-import com.hariharan.zerokey.security.VaultIntegrityManager
+import com.hariharan.zerokey.core.crypto.EncryptedVault
+import com.hariharan.zerokey.core.security.VaultIntegrityManager
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json

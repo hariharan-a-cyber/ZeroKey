@@ -1,11 +1,11 @@
 package com.hariharan.zerokey.data.sync
 
 import android.util.Base64
-import com.hariharan.zerokey.data.database.PasswordEntity
-import com.hariharan.zerokey.security.EncryptedData
-import com.hariharan.zerokey.security.EncryptedVault
-import com.hariharan.zerokey.security.VaultEncryptionManager
-import com.hariharan.zerokey.security.VaultIntegrityManager
+import com.hariharan.zerokey.core.database.PasswordEntity
+import com.hariharan.zerokey.core.crypto.EncryptedData
+import com.hariharan.zerokey.core.crypto.EncryptedVault
+import com.hariharan.zerokey.core.crypto.VaultEncryptionManager
+import com.hariharan.zerokey.core.security.VaultIntegrityManager
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json

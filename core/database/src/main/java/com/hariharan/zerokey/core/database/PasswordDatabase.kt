@@ -8,19 +8,23 @@ import androidx.room.RoomDatabase
 @Database(
     entities = [
         PasswordEntity::class, 
-        PasskeyEntity::class, 
-        SecurityEventEntity::class, 
-        SharedCredentialEntity::class, 
-        EmergencyAccessEntity::class, 
-        SyncMetadataEntity::class, 
+        VaultMetadata::class, 
+        AuditLogEntity::class,
+        PasskeyEntity::class,
+        SecurityEventEntity::class,
+        SharedCredentialEntity::class,
+        EmergencyAccessEntity::class,
+        SyncMetadataEntity::class,
         SecurityScoreHistoryEntity::class
     ],
-    version = 4,
+    version = 6,
     exportSchema = false
 )
 abstract class PasswordDatabase : RoomDatabase() {
 
     abstract fun passwordDao(): PasswordDao
+    abstract fun vaultMetadataDao(): VaultMetadataDao
+    abstract fun auditLogDao(): AuditLogDao
 
     companion object {
         @Volatile
@@ -31,7 +35,7 @@ abstract class PasswordDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     PasswordDatabase::class.java,
-                    "ZeroKey_Vault_DB"
+                    "ZeroKey_Database"
                 )
                 .fallbackToDestructiveMigration()
                 .build()

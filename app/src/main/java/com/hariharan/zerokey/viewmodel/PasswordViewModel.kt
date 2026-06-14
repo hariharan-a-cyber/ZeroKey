@@ -8,10 +8,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hariharan.zerokey.analytics.SecurityRecommendationEngine
 import com.hariharan.zerokey.data.backup.VaultBackupManager
-import com.hariharan.zerokey.data.database.AuditLogEntity
-import com.hariharan.zerokey.data.database.PasswordEntity
+import com.hariharan.zerokey.core.database.AuditLogEntity
+import com.hariharan.zerokey.core.database.PasswordEntity
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.data.repository.PasswordRepository
+import com.hariharan.zerokey.core.security.MasterPasswordManager
 import com.hariharan.zerokey.security.*
 import com.hariharan.zerokey.securityanalytics.VaultSecurityAnalyzer
 import com.hariharan.zerokey.securityanalytics.PasswordEntropyAnalyzer
@@ -30,18 +31,27 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
 import javax.crypto.spec.SecretKeySpec
+import com.hariharan.zerokey.core.crypto.EncryptionManager
+import com.hariharan.zerokey.core.security.BreachMonitor
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
-class PasswordViewModel(
+@HiltViewModel
+class PasswordViewModel @Inject constructor(
     private val repository: PasswordRepository,
     private val auditLogManager: AuditLogManager,
+    private val masterPasswordManager: MasterPasswordManager,
+    private val encryptionManager: EncryptionManager,
+    private val breachMonitor: BreachMonitor,
     private val backupManager: VaultBackupManager? = null,
     private val syncManager: DeviceSyncManager? = null,
     private val shareManager: CredentialShareManager? = null,
     private val emergencyManager: EmergencyAccessManager? = null,
     private val privacyModeManager: PrivacyModeManager? = null,
-    private val deviceTrustManager: DeviceTrustManager? = null,
-    private var userId: String = "guest"
+    private val deviceTrustManager: DeviceTrustManager? = null
 ) : ViewModel() {
+
+    private var userId: String = "guest"
 
     private val securityEventManager = SecurityEventManager(auditLogManager)
     private val securityAnalyzer = VaultSecurityAnalyzer(
@@ -78,6 +88,9 @@ class PasswordViewModel(
     var trustedDevices = mutableStateListOf<DeviceTrustManager.DeviceInfo>()
         private set
 
+    val keySecurityLevel: EncryptionManager.KeySecurityLevel
+        get() = encryptionManager.getKeySecurityLevel()
+
     init {
         // Initial minimal load
         loadInitialData()
@@ -91,7 +104,7 @@ class PasswordViewModel(
             
             // Defer heavy calculations until after initial UI is ready
             launch(Dispatchers.Default) {
-                healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
+                healthReport = PasswordHealthAnalyzer.analyze(allPasswords, breachMonitor)
                 refreshSecurityInsights()
                 
                 // Defer security report as it's the heaviest and used in sub-screens
@@ -110,7 +123,7 @@ class PasswordViewModel(
     }
 
     private suspend fun updateSecurityReport() {
-        val vaultKey = MasterPasswordManager.getVaultKey()
+        val vaultKey = masterPasswordManager.getVaultKey()
         if (vaultKey != null) {
             val report = withContext(Dispatchers.Default) {
                 securityAnalyzer.buildReport(allPasswords, vaultKey.encoded)
@@ -132,7 +145,7 @@ class PasswordViewModel(
             
             // Trigger deferred updates
             launch(Dispatchers.Default) {
-                healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
+                healthReport = PasswordHealthAnalyzer.analyze(allPasswords, breachMonitor)
                 refreshSecurityInsights()
                 updateSecurityReport()
             }
@@ -176,7 +189,7 @@ class PasswordViewModel(
         if (isOfflineMode || syncManager == null) return
         
         viewModelScope.launch {
-            val vaultKey = MasterPasswordManager.getVaultKey()
+            val vaultKey = masterPasswordManager.getVaultKey()
             val hmacKey = vaultKey?.encoded ?: return@launch // Proper HMAC derivation needed in production
             
             if (vaultKey != null) {
@@ -226,7 +239,7 @@ class PasswordViewModel(
                 filterPasswords()
 
                 launch(Dispatchers.Default) {
-                    healthReport = PasswordHealthAnalyzer.analyze(allPasswords)
+                    healthReport = PasswordHealthAnalyzer.analyze(allPasswords, breachMonitor)
                     refreshSecurityInsights()
                     updateSecurityReport()
                 }
@@ -285,8 +298,8 @@ class PasswordViewModel(
 
     fun exportVault(context: Context, file: File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
-            val vaultKey = MasterPasswordManager.getVaultKey()
-            val salt = MasterPasswordManager.getSalt(context)?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) }
+            val vaultKey = masterPasswordManager.getVaultKey()
+            val salt = masterPasswordManager.getSalt(context)?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) }
             
             if (vaultKey != null && salt != null && backupManager != null) {
                 try {
@@ -304,7 +317,7 @@ class PasswordViewModel(
 
     fun importVault(file: File, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
-            val vaultKey = MasterPasswordManager.getVaultKey()
+            val vaultKey = masterPasswordManager.getVaultKey()
             if (vaultKey != null && backupManager != null) {
                 try {
                     backupManager.importBackup(file, vaultKey, vaultKey)
@@ -324,7 +337,7 @@ class PasswordViewModel(
     fun shareCredential(senderId: String, recipientId: String, credentialId: Int) {
         viewModelScope.launch {
             val item = allPasswords.find { it.id == credentialId } ?: return@launch
-            val vaultKey = MasterPasswordManager.getVaultKey() ?: return@launch
+            val vaultKey = masterPasswordManager.getVaultKey() ?: return@launch
             val hmacKey = vaultKey.encoded // Simplified
             
             val payload = Json.encodeToString(PasswordItem.serializer(), item)
@@ -336,7 +349,7 @@ class PasswordViewModel(
     fun changeMasterPassword(context: Context, newPassword: String, onComplete: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
-                MasterPasswordManager.changeMasterPassword(context, newPassword.toCharArray())
+                masterPasswordManager.changeMasterPassword(context, newPassword.toCharArray())
                 auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Master Password changed (Keys rotated)")
                 onComplete(true)
             } catch (e: Exception) {

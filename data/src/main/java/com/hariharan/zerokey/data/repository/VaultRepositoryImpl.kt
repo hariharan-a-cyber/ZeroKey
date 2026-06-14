@@ -12,9 +12,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class VaultRepositoryImpl(
-    private val passwordDao: PasswordDao
+@Singleton
+class VaultRepositoryImpl @Inject constructor(
+    private val passwordDao: PasswordDao,
+    private val masterPasswordManager: MasterPasswordManager,
+    private val encryptionManager: EncryptionManager
 ) : VaultRepository {
 
     override fun getVaultEntries(): Flow<List<VaultEntry>> {
@@ -40,7 +45,7 @@ class VaultRepositoryImpl(
     }
 
     private fun encryptEntry(entry: VaultEntry): PasswordEntity {
-        val vaultKey = MasterPasswordManager.getVaultKey()
+        val vaultKey = masterPasswordManager.getVaultKey()
             ?: throw IllegalStateException("Vault is locked")
 
         val aad = "timestamp:${entry.createdAt}".toByteArray()
@@ -48,10 +53,10 @@ class VaultRepositoryImpl(
         // Convert CharArray to ByteArray for encryption
         val passwordBytes = entry.password.map { it.code.toByte() }.toByteArray()
         
-        val serviceNameEnc = EncryptionManager.encryptWithKey(entry.serviceName.toByteArray(), vaultKey, aad)
-        val usernameEnc = EncryptionManager.encryptWithKey(entry.username.toByteArray(), vaultKey, aad)
-        val passwordEnc = EncryptionManager.encryptWithKey(passwordBytes, vaultKey, aad)
-        val notesEnc = entry.notes?.let { EncryptionManager.encryptWithKey(it.toByteArray(), vaultKey, aad) }
+        val serviceNameEnc = encryptionManager.encryptWithKey(entry.serviceName.toByteArray(), vaultKey, aad)
+        val usernameEnc = encryptionManager.encryptWithKey(entry.username.toByteArray(), vaultKey, aad)
+        val passwordEnc = encryptionManager.encryptWithKey(passwordBytes, vaultKey, aad)
+        val notesEnc = entry.notes?.let { encryptionManager.encryptWithKey(it.toByteArray(), vaultKey, aad) }
 
         // Wipe temporary byte array
         passwordBytes.fill(0)
@@ -73,24 +78,24 @@ class VaultRepositoryImpl(
     }
 
     private fun decryptEntity(entity: PasswordEntity): VaultEntry {
-        val vaultKey = MasterPasswordManager.getVaultKey()
+        val vaultKey = masterPasswordManager.getVaultKey()
             ?: throw IllegalStateException("Vault is locked")
 
         val aad = "timestamp:${entity.createdAt}".toByteArray()
 
-        val serviceName = EncryptionManager.decryptWithKey(
+        val serviceName = encryptionManager.decryptWithKey(
             EncryptedData(Base64.decode(entity.encryptedServiceName, Base64.NO_WRAP), Base64.decode(entity.serviceNameIv, Base64.NO_WRAP)),
             vaultKey,
             aad
         ).decodeToString()
 
-        val username = EncryptionManager.decryptWithKey(
+        val username = encryptionManager.decryptWithKey(
             EncryptedData(Base64.decode(entity.encryptedUsername, Base64.NO_WRAP), Base64.decode(entity.usernameIv, Base64.NO_WRAP)),
             vaultKey,
             aad
         ).decodeToString()
 
-        val passwordBytes = EncryptionManager.decryptWithKey(
+        val passwordBytes = encryptionManager.decryptWithKey(
             EncryptedData(Base64.decode(entity.encryptedPassword, Base64.NO_WRAP), Base64.decode(entity.passwordIv, Base64.NO_WRAP)),
             vaultKey,
             aad
@@ -100,7 +105,7 @@ class VaultRepositoryImpl(
         passwordBytes.fill(0)
 
         val notes = entity.encryptedNotes?.let {
-            EncryptionManager.decryptWithKey(
+            encryptionManager.decryptWithKey(
                 EncryptedData(Base64.decode(it, Base64.NO_WRAP), Base64.decode(entity.notesIv!!, Base64.NO_WRAP)),
                 vaultKey,
                 aad

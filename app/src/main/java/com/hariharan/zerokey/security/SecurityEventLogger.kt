@@ -1,7 +1,7 @@
 package com.hariharan.zerokey.security
 
-import com.hariharan.zerokey.data.database.AuditLogDao
-import com.hariharan.zerokey.data.database.AuditLogEntity
+import com.hariharan.zerokey.core.database.AuditLogDao
+import com.hariharan.zerokey.core.database.AuditLogEntity
 
 sealed class SecurityEvent {
     data class AutofillBlocked(

@@ -9,7 +9,7 @@ import com.google.crypto.tink.BinaryKeysetWriter
 import com.google.crypto.tink.BinaryKeysetReader
 import com.google.crypto.tink.hybrid.HybridConfig
 import com.google.firebase.firestore.FirebaseFirestore
-import com.hariharan.zerokey.security.HmacEngine
+import com.hariharan.zerokey.core.crypto.HmacEngine
 import kotlinx.coroutines.tasks.await
 import java.io.ByteArrayOutputStream
 

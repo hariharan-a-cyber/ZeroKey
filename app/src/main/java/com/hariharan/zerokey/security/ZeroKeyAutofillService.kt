@@ -13,13 +13,17 @@ import android.view.inputmethod.EditorInfo
 import android.widget.RemoteViews
 import androidx.autofill.inline.v1.InlineSuggestionUi
 import com.hariharan.zerokey.R
-import com.hariharan.zerokey.data.database.PasswordDatabase
+import com.hariharan.zerokey.core.database.PasswordDatabase
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.data.repository.PasswordRepository
-import com.hariharan.zerokey.utils.PrivacyLogger
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+
+import com.hariharan.zerokey.core.security.MasterPasswordManager
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
  * ZeroKeyAutofillService
@@ -28,7 +32,11 @@ import kotlinx.coroutines.launch
  * - Extracts domain from the requesting app/webpage
  * - Validates via DomainVerificationManager before ANY credential is returned
  */
+@AndroidEntryPoint
 class ZeroKeyAutofillService : AutofillService() {
+
+    @Inject lateinit var masterPasswordManager: MasterPasswordManager
+    @Inject lateinit var vaultRepository: PasswordRepository
 
     private val domainVerifier = DomainVerificationManager(DigitalAssetLinksVerifier())
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -99,7 +107,7 @@ class ZeroKeyAutofillService : AutofillService() {
 
                 // ── CHECK IF FILL IS AUTHORIZED ───────────────────────────
                 // Even if the vault is "unlocked", we require fresh auth based on user policy
-                if (!MasterPasswordManager.isAutofillAuthorized(this@ZeroKeyAutofillService)) {
+                if (!masterPasswordManager.isAutofillAuthorized(this@ZeroKeyAutofillService)) {
                     val intent = Intent(this@ZeroKeyAutofillService, AutofillUnlockActivity::class.java).apply {
                         putExtra("username_id", parseResult.usernameId)
                         putExtra("password_id", parseResult.passwordId)
@@ -166,8 +174,7 @@ class ZeroKeyAutofillService : AutofillService() {
                 }
 
                 // ── CREDENTIAL LOOKUP ────────────────────────────────────────
-                val database = PasswordDatabase.getDatabase(this@ZeroKeyAutofillService)
-                val repository = PasswordRepository(database.passwordDao(), database.vaultMetadataDao())
+                val repository = vaultRepository
 
                 val response = FillResponse.Builder()
                 val inlineRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -294,8 +301,7 @@ class ZeroKeyAutofillService : AutofillService() {
                 val parsed = parseStructureWithValues(structure)
                 if (parsed.username != null && parsed.password != null) {
                     val domain = parsed.webDomain ?: parsed.packageName ?: "Unknown"
-                    val database = PasswordDatabase.getDatabase(this@ZeroKeyAutofillService)
-                    val repository = PasswordRepository(database.passwordDao(), database.vaultMetadataDao())
+                    val repository = vaultRepository
                     
                     val existing = repository.getPasswords().find { 
                         it.serviceName.contains(domain, ignoreCase = true) && it.username == parsed.username 
@@ -321,7 +327,7 @@ class ZeroKeyAutofillService : AutofillService() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        MasterPasswordManager.onTrimMemory(level)
+        masterPasswordManager.onTrimMemory(level)
     }
 
     private fun parseStructureWithValues(structure: AssistStructure): ParsedStructureWithValues {

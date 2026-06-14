@@ -9,12 +9,15 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import java.security.MessageDigest
 import java.util.*
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Phase 7: Privacy-preserving Breach Monitor using the k-anonymity model.
  * Matches are performed locally. Full hashes or passwords never leave the device.
  */
-object BreachMonitor {
+@Singleton
+class BreachMonitor @Inject constructor() {
 
     private val client = HttpClient(Android) {
         install(Logging) {

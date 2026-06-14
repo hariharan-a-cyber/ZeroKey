@@ -1,7 +1,8 @@
 package com.hariharan.zerokey.security
 
+import com.hariharan.zerokey.core.crypto.EncryptedVault
 import android.util.Base64
-import com.hariharan.zerokey.data.database.PasswordEntity
+import com.hariharan.zerokey.core.database.PasswordEntity
 import com.hariharan.zerokey.data.repository.PasswordRepository
 import com.hariharan.zerokey.data.sync.VaultSerializer
 import javax.crypto.SecretKey

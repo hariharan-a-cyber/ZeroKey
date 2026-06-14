@@ -35,7 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import com.hariharan.zerokey.data.database.PasswordDatabase
+import com.hariharan.zerokey.core.database.PasswordDatabase
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.data.repository.PasswordRepository
 import com.hariharan.zerokey.ui.theme.ZeroKeyTheme
@@ -44,11 +44,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import com.hariharan.zerokey.core.security.MasterPasswordManager
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+
 /**
  * Activity that handles unlocking the vault specifically for Autofill requests.
  * Triggers biometric first, with a fallback to Master Password.
  */
+@AndroidEntryPoint
 class AutofillUnlockActivity : FragmentActivity() {
+
+    @Inject lateinit var masterPasswordManager: MasterPasswordManager
+    @Inject lateinit var vaultRepository: PasswordRepository
 
     private var usernameId: AutofillId? = null
     private var passwordId: AutofillId? = null
@@ -73,6 +81,8 @@ class AutofillUnlockActivity : FragmentActivity() {
         setContent {
             ZeroKeyTheme {
                 AutofillUnlockScreen(
+                    masterPasswordManager = masterPasswordManager,
+                    vaultRepository = vaultRepository,
                     isManual = isManualSearch,
                     onUnlocked = { 
                         if (isManualSearch) {
@@ -92,8 +102,7 @@ class AutofillUnlockActivity : FragmentActivity() {
 
     private fun finalizeAutofill() {
         val domain = verifiedDomain ?: ""
-        val database = PasswordDatabase.getDatabase(this)
-        val repository = PasswordRepository(database.passwordDao(), database.vaultMetadataDao())
+        val repository = vaultRepository
 
         CoroutineScope(Dispatchers.IO).launch {
             val credentials = repository.getPasswords().filter {
@@ -141,6 +150,8 @@ class AutofillUnlockActivity : FragmentActivity() {
 
 @Composable
 fun AutofillUnlockScreen(
+    masterPasswordManager: MasterPasswordManager,
+    vaultRepository: PasswordRepository,
     isManual: Boolean = false,
     onUnlocked: () -> Unit,
     onSearchComplete: (PasswordItem) -> Unit = {},
@@ -154,7 +165,7 @@ fun AutofillUnlockScreen(
     var isAuthenticated by remember { mutableStateOf(false) }
     
     if (isAuthenticated && isManual) {
-        ManualSearchScreen(onSearchComplete, onCancel)
+        ManualSearchScreen(vaultRepository, onSearchComplete, onCancel)
         return
     }
 
@@ -185,7 +196,7 @@ fun AutofillUnlockScreen(
             if (!showMasterPassword) {
                 Button(
                     onClick = { 
-                        triggerBiometric(context) {
+                        triggerBiometric(context, masterPasswordManager) {
                             isAuthenticated = true
                             onUnlocked()
                         }
@@ -224,8 +235,8 @@ fun AutofillUnlockScreen(
                 Button(
                     onClick = {
                         try {
-                            MasterPasswordManager.unlockVault(context, password.toCharArray())
-                            MasterPasswordManager.authorizeAutofill()
+                            masterPasswordManager.unlockVault(context, password.toCharArray())
+                            masterPasswordManager.authorizeAutofill()
                             isAuthenticated = true
                             onUnlocked()
                         } catch (e: Exception) {
@@ -253,7 +264,7 @@ fun AutofillUnlockScreen(
     // Auto-trigger biometric on first launch
     LaunchedEffect(Unit) {
         if (!showMasterPassword && !isAuthenticated) {
-            triggerBiometric(context) {
+            triggerBiometric(context, masterPasswordManager) {
                 isAuthenticated = true
                 onUnlocked()
             }
@@ -263,15 +274,14 @@ fun AutofillUnlockScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ManualSearchScreen(onSelect: (PasswordItem) -> Unit, onCancel: () -> Unit) {
+fun ManualSearchScreen(repository: PasswordRepository, onSelect: (PasswordItem) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var items by remember { mutableStateOf<List<PasswordItem>>(emptyList()) }
     
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            val database = PasswordDatabase.getDatabase(context)
-            items = PasswordRepository(database.passwordDao()).getPasswords()
+            items = repository.getPasswords()
         }
     }
     
@@ -315,13 +325,13 @@ fun ManualSearchScreen(onSelect: (PasswordItem) -> Unit, onCancel: () -> Unit) {
     }
 }
 
-private fun triggerBiometric(activity: FragmentActivity, onSuccess: () -> Unit) {
+private fun triggerBiometric(activity: FragmentActivity, masterPasswordManager: MasterPasswordManager, onSuccess: () -> Unit) {
     val executor = ContextCompat.getMainExecutor(activity)
     val biometricPrompt = BiometricPrompt(activity, executor,
         object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 super.onAuthenticationSucceeded(result)
-                MasterPasswordManager.authorizeAutofill()
+                masterPasswordManager.authorizeAutofill()
                 onSuccess()
             }
         })

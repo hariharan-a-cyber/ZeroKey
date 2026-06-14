@@ -23,7 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.hariharan.zerokey.security.EncryptionManager
+import com.hariharan.zerokey.core.crypto.EncryptionManager
 import com.hariharan.zerokey.security.SecurityHardening
 import com.hariharan.zerokey.securityanalytics.*
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
@@ -80,14 +80,14 @@ fun SecurityDashboardScreen(
                     CircularProgressIndicator()
                 }
             } else {
-                DashboardContent(report, Modifier.fillMaxSize(), onFixCredential)
+                DashboardContent(viewModel, report, Modifier.fillMaxSize(), onFixCredential)
             }
         }
     }
 }
 
 @Composable
-private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier, onFixCredential: (Int) -> Unit) {
+private fun DashboardContent(viewModel: PasswordViewModel, report: VaultSecurityReport, modifier: Modifier, onFixCredential: (Int) -> Unit) {
     val score = report.securityScore
     val grade = when {
         score >= 90 -> SecurityGrade.EXCELLENT
@@ -105,7 +105,7 @@ private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier, on
         item { SecurityScoreCard(score, grade) }
 
         item {
-            HardwareSecurityCard()
+            HardwareSecurityCard(viewModel)
         }
 
         item {
@@ -165,8 +165,8 @@ private fun DashboardContent(report: VaultSecurityReport, modifier: Modifier, on
 }
 
 @Composable
-private fun HardwareSecurityCard() {
-    val securityLevel = remember { EncryptionManager.getKeySecurityLevel() }
+private fun HardwareSecurityCard(viewModel: PasswordViewModel) {
+    val securityLevel = remember { viewModel.keySecurityLevel }
     
     val (label, description, color, icon) = when (securityLevel) {
         EncryptionManager.KeySecurityLevel.STRONGBOX -> Triple(

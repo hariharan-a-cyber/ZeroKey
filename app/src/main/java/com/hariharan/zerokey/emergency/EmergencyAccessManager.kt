@@ -3,7 +3,7 @@ package com.hariharan.zerokey.emergency
 import android.util.Base64
 import com.hariharan.zerokey.core.common.PrivacyLogger
 import com.google.firebase.firestore.FirebaseFirestore
-import com.hariharan.zerokey.security.CryptoEngine
+import com.hariharan.zerokey.core.crypto.CryptoEngine
 import kotlinx.coroutines.tasks.await
 import java.security.KeyFactory
 import java.security.PublicKey

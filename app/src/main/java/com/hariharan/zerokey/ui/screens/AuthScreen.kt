@@ -32,12 +32,13 @@ import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.R
 import com.hariharan.zerokey.GoogleAuthManager
 import com.hariharan.zerokey.security.FirebaseAuthenticator
-import com.hariharan.zerokey.security.MasterPasswordManager
+import com.hariharan.zerokey.core.security.MasterPasswordManager
 import kotlinx.coroutines.launch
 
 @Composable
 fun AuthScreen(
     authenticator: FirebaseAuthenticator,
+    masterPasswordManager: MasterPasswordManager,
     onAuthSuccess: () -> Unit
 ) {
     var isLogin by remember { mutableStateOf(true) }
@@ -57,7 +58,7 @@ fun AuthScreen(
 
     // Check if we need to restore vault session
     LaunchedEffect(Unit) {
-        if (authenticator.isAuthenticated && !MasterPasswordManager.isUnlocked()) {
+        if (authenticator.isAuthenticated && !masterPasswordManager.isUnlocked()) {
             isRestoringSession = true
         }
     }
@@ -155,7 +156,7 @@ fun AuthScreen(
                         
                         if (isRestoringSession) {
                             try {
-                                MasterPasswordManager.unlockVault(context, password.toCharArray())
+                                masterPasswordManager.unlockVault(context, password.toCharArray())
                                 onAuthSuccess()
                             } catch (e: Exception) {
                                 errorMessage = "Unlock failed: Incorrect password"
@@ -169,10 +170,10 @@ fun AuthScreen(
                             
                             if (user != null) {
                                 try {
-                                    if (!MasterPasswordManager.isSetup(context)) {
-                                        MasterPasswordManager.setupVault(context, password.toCharArray())
+                                    if (!masterPasswordManager.isSetup(context)) {
+                                        masterPasswordManager.setupVault(context, password.toCharArray())
                                     } else {
-                                        MasterPasswordManager.unlockVault(context, password.toCharArray())
+                                        masterPasswordManager.unlockVault(context, password.toCharArray())
                                     }
                                     onAuthSuccess()
                                 } catch (e: Exception) {

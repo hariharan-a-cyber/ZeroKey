@@ -1,9 +1,9 @@
 package com.hariharan.zerokey.sync
 
-import com.hariharan.zerokey.security.CryptoEngine
-import com.hariharan.zerokey.security.HmacEngine
-import com.hariharan.zerokey.data.database.PasswordEntity
-import com.hariharan.zerokey.utils.PrivacyLogger
+import com.hariharan.zerokey.core.crypto.CryptoEngine
+import com.hariharan.zerokey.core.crypto.HmacEngine
+import com.hariharan.zerokey.core.database.PasswordEntity
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
 

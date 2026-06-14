@@ -23,21 +23,22 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.hariharan.zerokey.security.MasterPasswordManager
+import com.hariharan.zerokey.core.security.MasterPasswordManager
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: PasswordViewModel,
+    masterPasswordManager: MasterPasswordManager,
     onBack: () -> Unit,
     onManageDevices: () -> Unit
 ) {
     val context = LocalContext.current
     val surfaceColor = MaterialTheme.colorScheme.surface
     
-    var currentTimeout by remember { mutableStateOf(MasterPasswordManager.getAuthTimeout(context)) }
-    var lockOnExit by remember { mutableStateOf(MasterPasswordManager.shouldLockOnExit(context)) }
+    var currentTimeout by remember { mutableStateOf(masterPasswordManager.getAuthTimeout(context)) }
+    var lockOnExit by remember { mutableStateOf(masterPasswordManager.shouldLockOnExit(context)) }
     var showTimeoutDialog by remember { mutableStateOf(false) }
     var showRotationConfirm by remember { mutableStateOf(false) }
     var showPasswordChange by remember { mutableStateOf(false) }
@@ -146,7 +147,7 @@ fun SettingsScreen(
                             checked = lockOnExit,
                             onCheckedChange = {
                                 lockOnExit = it
-                                MasterPasswordManager.setLockOnExit(context, it)
+                                masterPasswordManager.setLockOnExit(context, it)
                             }
                         )
                     }
@@ -358,7 +359,7 @@ fun SettingsScreen(
                                     selected = (option.value == currentTimeout),
                                     onClick = {
                                         currentTimeout = option.value
-                                        MasterPasswordManager.setAuthTimeout(context, option.value)
+                                        masterPasswordManager.setAuthTimeout(context, option.value)
                                         showTimeoutDialog = false
                                     },
                                     role = Role.RadioButton

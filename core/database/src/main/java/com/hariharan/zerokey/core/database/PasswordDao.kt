@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface PasswordDao {
 
+    // --- Passwords ---
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPassword(password: PasswordEntity)
 
@@ -30,7 +31,7 @@ interface PasswordDao {
     @Delete
     suspend fun deletePassword(password: PasswordEntity)
 
-    // Passkey methods
+    // --- Passkeys ---
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPasskey(passkey: PasskeyEntity)
 
@@ -39,4 +40,32 @@ interface PasswordDao {
 
     @Query("DELETE FROM passkey_records WHERE credentialId = :credentialId")
     suspend fun deletePasskeyById(credentialId: String)
+
+    // --- Security Events ---
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSecurityEvent(event: SecurityEventEntity)
+
+    @Query("SELECT * FROM security_events ORDER BY timestamp DESC")
+    fun getAllSecurityEventsFlow(): Flow<List<SecurityEventEntity>>
+
+    // --- Incoming Shares ---
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSharedCredential(share: SharedCredentialEntity)
+
+    @Query("SELECT * FROM incoming_shares WHERE status = :status")
+    fun getSharedCredentialsByStatusFlow(status: String): Flow<List<SharedCredentialEntity>>
+
+    // --- Emergency Access ---
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertEmergencyConfig(config: EmergencyAccessEntity)
+
+    @Query("SELECT * FROM emergency_access_config WHERE ownerId = :ownerId")
+    suspend fun getEmergencyConfig(ownerId: String): EmergencyAccessEntity?
+
+    // --- Sync Metadata ---
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSyncMetadata(metadata: SyncMetadataEntity)
+
+    @Query("SELECT * FROM vault_sync_metadata WHERE userId = :userId")
+    suspend fun getSyncMetadata(userId: String): SyncMetadataEntity?
 }

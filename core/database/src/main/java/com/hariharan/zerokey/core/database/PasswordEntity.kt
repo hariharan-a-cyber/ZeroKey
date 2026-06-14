@@ -23,7 +23,10 @@ data class PasswordEntity(
     val isDeleted: Boolean = false,
     val passkeyCredentialId: String? = null,
     val lastBreachCheck: Long = 0,
-    val breachFound: Boolean = false
+    val breachFound: Boolean = false,
+    val recordUid: String? = null,
+    val encryptionVersion: Int = 1,
+    val schemaVersion: Int = 1
 )
 
 @Serializable

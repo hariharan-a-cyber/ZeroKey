@@ -1,5 +1,7 @@
 package com.hariharan.zerokey.security
 
+import com.hariharan.zerokey.core.crypto.EncryptedVault
+import com.hariharan.zerokey.core.security.VaultIntegrityManager
 import android.util.Base64
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions

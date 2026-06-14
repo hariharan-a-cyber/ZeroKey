@@ -1,4 +1,4 @@
-package com.hariharan.zerokey.security
+package com.hariharan.zerokey.core.crypto
 
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec

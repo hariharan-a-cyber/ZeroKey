@@ -1,29 +1,62 @@
 package com.hariharan.zerokey.core.crypto
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import com.hariharan.zerokey.core.common.PrivacyLogger
+import dagger.hilt.android.scopes.ActivityScoped
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Enhanced Encryption Manager for ZeroKey.
  * Implements AES-256-GCM with Associated Authenticated Data (AAD) support.
  * Supports Hardware-backed keys (TEE) and attempts to use StrongBox (Secure Element) if available.
  */
-object EncryptionManager {
+@Singleton
+class EncryptionManager @Inject constructor() {
 
-    private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-    private const val KEY_ALIAS = "ZeroKeyRootKey"
-    private const val AES_MODE = "AES/GCM/NoPadding"
-    private const val IV_LENGTH = 12 
-    private const val AUTH_TAG_LENGTH = 128
+    companion object {
+        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+        private const val KEY_ALIAS = "ZeroKeyRootKey"
+        private const val AES_MODE = "AES/GCM/NoPadding"
+        private const val IV_LENGTH = 12 
+        private const val AUTH_TAG_LENGTH = 128
+    }
+
+    enum class KeySecurityLevel { SOFTWARE, TEE, STRONGBOX }
 
     fun init() {
         generateRootKeyIfNeeded()
+    }
+
+    fun getKeySecurityLevel(): KeySecurityLevel {
+        return try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            val key = keyStore.getKey(KEY_ALIAS, null) as? SecretKey ?: return KeySecurityLevel.SOFTWARE
+            val factory = SecretKeyFactory.getInstance(key.algorithm, ANDROID_KEYSTORE)
+            val keyInfo = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                when (keyInfo.securityLevel) {
+                    KeyProperties.SECURITY_LEVEL_STRONGBOX -> KeySecurityLevel.STRONGBOX
+                    KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> KeySecurityLevel.TEE
+                    else -> KeySecurityLevel.SOFTWARE
+                }
+            } else if (keyInfo.isInsideSecureHardware) {
+                KeySecurityLevel.TEE
+            } else {
+                KeySecurityLevel.SOFTWARE
+            }
+        } catch (e: Exception) {
+            KeySecurityLevel.SOFTWARE
+        }
     }
 
     private fun generateRootKeyIfNeeded() {

@@ -13,6 +13,14 @@ object VaultEncryptionManager {
     private const val AUTH_TAG_LENGTH = 128
     private const val IV_LENGTH = 12
 
+    fun encryptVault(plaintext: String, key: SecretKey, aad: ByteArray? = null): EncryptedData {
+        return encrypt(plaintext.toByteArray(Charsets.UTF_8), key, aad)
+    }
+
+    fun decryptVault(encryptedData: EncryptedData, key: SecretKey, aad: ByteArray? = null): String {
+        return String(decrypt(encryptedData, key, aad), Charsets.UTF_8)
+    }
+
     fun encrypt(data: ByteArray, key: SecretKey, aad: ByteArray? = null): EncryptedData {
         val cipher = Cipher.getInstance(AES_MODE)
         val iv = ByteArray(IV_LENGTH)

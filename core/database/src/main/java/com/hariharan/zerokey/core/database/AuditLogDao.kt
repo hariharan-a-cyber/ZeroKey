@@ -1,4 +1,4 @@
-package com.hariharan.zerokey.data.database
+package com.hariharan.zerokey.core.database
 
 import androidx.room.Dao
 import androidx.room.Insert

@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.ksp)
+    alias(libs.plugins.hilt.android)
 }
 
 android {
@@ -28,4 +30,7 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.ktor.client.android)
     implementation(libs.ktor.client.logging)
+    
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
 }

@@ -1,7 +1,7 @@
 package com.hariharan.zerokey.security
 
-import com.hariharan.zerokey.data.database.AuditLogDao
-import com.hariharan.zerokey.data.database.AuditLogEntity
+import com.hariharan.zerokey.core.database.AuditLogDao
+import com.hariharan.zerokey.core.database.AuditLogEntity
 
 /**
  * Manages the recording of security-critical audit logs.
