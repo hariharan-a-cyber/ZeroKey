@@ -16,6 +16,14 @@ class HmacEngine {
         return mac.doFinal(data)
     }
 
+    /**
+     * Derives a distinct 32-byte subkey from a base key for a given purpose label
+     * (HKDF-Expand, single block). Lets us use separate keys for encryption vs MAC.
+     */
+    fun deriveSubKey(baseKey: ByteArray, label: String): ByteArray {
+        return computeHmacSha256((label + "\u0001").toByteArray(Charsets.UTF_8), baseKey)
+    }
+
     fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {
         return MessageDigest.isEqual(a, b)
     }

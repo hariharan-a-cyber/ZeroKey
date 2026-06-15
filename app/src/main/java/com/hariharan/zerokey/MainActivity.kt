@@ -208,11 +208,9 @@ class MainActivity : FragmentActivity() {
             val observer = LifecycleEventObserver { _, event ->
                 when (event) {
                     Lifecycle.Event.ON_STOP -> {
-                        // Lock the UI
-                        isLocked = true
-                        
-                        // Aggressive key purging only if user policy allows it
+                        // Only re-lock the UI and purge keys if the user's policy says so.
                         if (!isChangingConfigurations && masterPasswordManager.shouldLockOnExit(applicationContext)) {
+                            isLocked = true
                             masterPasswordManager.lockVault()
                             viewModel.lockVault()
                         }
@@ -256,6 +254,9 @@ class MainActivity : FragmentActivity() {
                 if (uid != "guest") {
                     try {
                         deviceTrustManager.registerCurrentDevice(uid)
+                    } catch (_: Exception) {}
+                    try {
+                        credentialShareManager.registerMyKeysIfNeeded(applicationContext, uid)
                     } catch (_: Exception) {}
                 }
             }

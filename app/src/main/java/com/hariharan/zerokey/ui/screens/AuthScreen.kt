@@ -158,13 +158,14 @@ fun AuthScreen(
                         isLoading = true
                         errorMessage = null
                         
+                        if (authAttemptManager.isLockedOut()) {
+                            val secs = authAttemptManager.getRemainingLockoutTime() / 1000
+                            errorMessage = "Too many attempts. Try again in ${secs}s."
+                            isLoading = false
+                            return@launch
+                        }
+
                         if (isRestoringSession) {
-                            if (authAttemptManager.isLockedOut()) {
-                                val secs = authAttemptManager.getRemainingLockoutTime() / 1000
-                                errorMessage = "Too many attempts. Try again in ${secs}s."
-                                isLoading = false
-                                return@launch
-                            }
                             try {
                                 if (!masterPasswordManager.isSetup(context)) {
                                     // First-time Google user: create the vault with this master password.
@@ -193,8 +194,10 @@ fun AuthScreen(
                                         } else {
                                             masterPasswordManager.unlockVault(context, password.toCharArray())
                                         }
+                                        authAttemptManager.resetAttempts()
                                         onAuthSuccess()
                                     } catch (e: Exception) {
+                                        authAttemptManager.recordFailedAttempt()
                                         errorMessage = "Vault unlock failed: Incorrect password"
                                     }
                                 }

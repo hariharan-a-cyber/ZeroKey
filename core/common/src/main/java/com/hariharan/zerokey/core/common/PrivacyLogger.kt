@@ -16,6 +16,10 @@ import javax.crypto.spec.SecretKeySpec
 object PrivacyLogger {
 
     private const val GLOBAL_TAG = "ZeroKey_Safe"
+
+    /** Set to false in release builds to suppress non-error logs. */
+    @Volatile
+    var verboseEnabled: Boolean = true
     private const val ALGORITHM = "HmacSHA256"
     private const val ROTATION_INTERVAL_MS = 24 * 60 * 60 * 1000L // 24 Hours
 
@@ -40,11 +44,30 @@ object PrivacyLogger {
         return diagnosticKey
     }
 
-    fun v(tag: String, msg: String) = Log.v(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
-    fun d(tag: String, msg: String) = Log.d(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
-    fun i(tag: String, msg: String) = Log.i(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
-    fun w(tag: String, msg: String) = Log.w(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
-    fun w(tag: String, msg: String, tr: Throwable) = Log.w(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}", sanitizeThrowable(tr))
+    fun v(tag: String, msg: String) {
+        if (!verboseEnabled) return
+        Log.v(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
+    }
+
+    fun d(tag: String, msg: String) {
+        if (!verboseEnabled) return
+        Log.d(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
+    }
+
+    fun i(tag: String, msg: String) {
+        if (!verboseEnabled) return
+        Log.i(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
+    }
+
+    fun w(tag: String, msg: String) {
+        if (!verboseEnabled) return
+        Log.w(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}")
+    }
+
+    fun w(tag: String, msg: String, tr: Throwable) {
+        if (!verboseEnabled) return
+        Log.w(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}", sanitizeThrowable(tr))
+    }
     fun e(tag: String, msg: String, tr: Throwable? = null) = Log.e(GLOBAL_TAG, "[$tag] ${sanitizeError(msg)}", tr?.let { sanitizeThrowable(it) })
 
     /**

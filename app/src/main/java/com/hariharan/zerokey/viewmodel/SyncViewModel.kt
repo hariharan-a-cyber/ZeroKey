@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hariharan.zerokey.core.security.MasterPasswordManager
 import com.hariharan.zerokey.core.crypto.EncryptedData
+import com.hariharan.zerokey.core.crypto.HmacEngine
+import com.hariharan.zerokey.security.PrivacyModeManager
 import com.hariharan.zerokey.sync.DeviceSyncManager
 import com.hariharan.zerokey.sync.PullResult
 import com.hariharan.zerokey.sync.SyncResult
@@ -25,7 +27,9 @@ class SyncViewModel @Inject constructor(
     application: android.app.Application,
     private val repository: PasswordRepository,
     private val syncManager: DeviceSyncManager,
-    private val masterPasswordManager: MasterPasswordManager
+    private val masterPasswordManager: MasterPasswordManager,
+    private val hmacEngine: HmacEngine,
+    private val privacyModeManager: PrivacyModeManager
 ) : AndroidViewModel(application) {
 
     private val _syncState = MutableStateFlow<SyncStatus>(SyncStatus.Idle)
@@ -33,14 +37,18 @@ class SyncViewModel @Inject constructor(
 
     fun performSync(userId: String) {
         viewModelScope.launch {
+            if (privacyModeManager.isOfflineOnly()) {
+                _syncState.value = SyncStatus.Error("Offline (Stealth) mode is ON. Turn it off in the vault menu to sync.")
+                return@launch
+            }
             _syncState.value = SyncStatus.Syncing
             
             try {
                 val vaultKey = masterPasswordManager.getVaultKey() 
                     ?: throw IllegalStateException("Vault is locked")
                 
-                val encryptionKey = vaultKey.encoded
-                val hmacKey = vaultKey.encoded
+                val encryptionKey = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-enc-v1")
+                val hmacKey = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-mac-v1")
 
                 val localPasswords = repository.getPasswords()
                 val localJson = Json.encodeToString(ListSerializer(PasswordEntity.serializer()), localPasswords.map { it.toEntity() })
@@ -154,8 +162,8 @@ class SyncViewModel @Inject constructor(
                 val pushResult = syncManager.pushVaultSnapshot(
                     userId = userId,
                     plaintextVaultJson = localJson,
-                    encryptionKey = vaultKey.encoded,
-                    hmacKey = vaultKey.encoded,
+                    encryptionKey = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-enc-v1"),
+                    hmacKey = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-mac-v1"),
                     wrappedKey = masterPasswordManager.getWrappedVaultKey(),
                     vaultEpochId = repository.getVaultEpochId(),
                     previousSnapshotHmac = repository.getLastKnownHmac()

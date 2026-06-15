@@ -1,5 +1,6 @@
 package com.hariharan.zerokey.sharing
 
+import android.content.Context
 import android.util.Base64
 import com.google.crypto.tink.HybridDecrypt
 import com.google.crypto.tink.HybridEncrypt
@@ -8,116 +9,91 @@ import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.BinaryKeysetWriter
 import com.google.crypto.tink.BinaryKeysetReader
 import com.google.crypto.tink.hybrid.HybridConfig
+import com.google.crypto.tink.integration.android.AndroidKeysetManager
 import com.google.firebase.firestore.FirebaseFirestore
 import com.hariharan.zerokey.core.crypto.HmacEngine
 import kotlinx.coroutines.tasks.await
 import java.io.ByteArrayOutputStream
 
 /**
- * Hardened Secure Sharing Architecture.
- * Upgraded from RSA-2048 to ECC (Curve25519) using Google Tink.
- * Uses ECIES (Elliptic Curve Integrated Encryption Scheme) with HKDF and AES-GCM.
+ * Zero-knowledge credential sharing using Tink ECIES (X25519/P-256 + HKDF + AES-GCM).
+ * The private keyset is persisted on-device, encrypted by an Android Keystore master key.
+ * Integrity is provided by Tink's AEAD with sender:recipient bound as AAD.
  */
 class CredentialShareManager(
     private val firestore: FirebaseFirestore,
     private val hmacEngine: HmacEngine
 ) {
-
     private val COLLECTION_SHARES = "shared_credentials"
     private val COLLECTION_KEYS = "public_keys"
 
-    init {
-        // Register hybrid encryption configurations
-        HybridConfig.register()
+    companion object {
+        private const val KEYSET_PREF = "zerokey_share_keyset_prefs"
+        private const val KEYSET_NAME = "zerokey_share_keyset"
+        private const val MASTER_KEY_URI = "android-keystore://zerokey_share_master"
+        private const val KEY_TEMPLATE = "ECIES_P256_HKDF_HMAC_SHA256_AES128_GCM"
     }
 
-    /**
-     * Shares a credential using the recipient's Curve25519 public key.
-     */
-    suspend fun shareCredential(
-        senderId: String,
-        recipientId: String,
-        plaintextPayload: String,
-        hmacKey: ByteArray
-    ) {
-        // 1. Fetch recipient's X25519 public keyset
-        val recipientPublicKeyBase64 = fetchPublicKey(recipientId) 
-            ?: throw Exception("Recipient public key not found")
-        
-        val publicKeysetHandle = KeysetHandle.readNoSecret(
-            BinaryKeysetReader.withBytes(Base64.decode(recipientPublicKeyBase64, Base64.NO_WRAP))
+    init { HybridConfig.register() }
+
+    /** Loads (or creates) this device's persistent private keyset (Keystore-encrypted at rest). */
+    private fun getPrivateKeysetHandle(context: Context): KeysetHandle {
+        return AndroidKeysetManager.Builder()
+            .withSharedPref(context.applicationContext, KEYSET_NAME, KEYSET_PREF)
+            .withKeyTemplate(KeyTemplates.get(KEY_TEMPLATE))
+            .withMasterKeyUri(MASTER_KEY_URI)
+            .build()
+            .keysetHandle
+    }
+
+    /** Publishes this user's public key once. Safe to call on every login. */
+    suspend fun registerMyKeysIfNeeded(context: Context, userId: String) {
+        val privateHandle = getPrivateKeysetHandle(context) // creates locally if missing
+        if (fetchPublicKey(userId) != null) return          // already published
+
+        val out = ByteArrayOutputStream()
+        privateHandle.publicKeysetHandle.writeNoSecret(BinaryKeysetWriter.withOutputStream(out))
+        val publicKeyB64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+
+        firestore.collection(COLLECTION_KEYS).document(userId).set(
+            mapOf("userId" to userId, "publicKey" to publicKeyB64)
+        ).await()
+    }
+
+    /** Shares a credential. Throws a clear error if the recipient ID has no published key. */
+    suspend fun shareCredential(senderId: String, recipientId: String, plaintextPayload: String) {
+        val recipientPublicKeyB64 = fetchPublicKey(recipientId)
+            ?: throw IllegalArgumentException("No ZeroKey user found for that ID. Ask them to open ZeroKey once, then share their ID.")
+
+        val publicHandle = KeysetHandle.readNoSecret(
+            BinaryKeysetReader.withBytes(Base64.decode(recipientPublicKeyB64, Base64.NO_WRAP))
         )
-        val hybridEncrypt = publicKeysetHandle.getPrimitive(HybridEncrypt::class.java)
-
-        // 2. Perform Hybrid Encryption (X25519 + AES-GCM internally)
-        // Context info (AAD) binds the encryption to the sender and recipient
+        val hybridEncrypt = publicHandle.getPrimitive(HybridEncrypt::class.java)
         val contextInfo = "$senderId:$recipientId".toByteArray()
-        val encryptedData = hybridEncrypt.encrypt(plaintextPayload.toByteArray(), contextInfo)
-
-        // 3. Sign the ciphertext with HMAC for additional integrity
-        val hmac = hmacEngine.computeHmacSha256(encryptedData, hmacKey)
+        val encrypted = hybridEncrypt.encrypt(plaintextPayload.toByteArray(), contextInfo)
 
         val share = SharedCredential(
             senderUserId = senderId,
             recipientUserId = recipientId,
-            encryptedPayload = Base64.encodeToString(encryptedData, Base64.NO_WRAP),
-            ephemeralPublicKey = "", // Tink embeds the ephemeral key in the payload
-            iv = "", // Handled by AEAD in Tink
-            hmac = Base64.encodeToString(hmac, Base64.NO_WRAP)
+            encryptedPayload = Base64.encodeToString(encrypted, Base64.NO_WRAP),
+            ephemeralPublicKey = "",
+            iv = "",
+            hmac = "" // Integrity provided by Tink AEAD; no separate HMAC needed.
         )
-
         firestore.collection(COLLECTION_SHARES).add(share).await()
     }
 
-    /**
-     * Decrypts a shared credential using the user's private ECC key.
-     */
-    suspend fun receiveCredential(
-        share: SharedCredential,
-        privateKeysetHandle: KeysetHandle,
-        hmacKey: ByteArray
-    ): String {
-        // 1. Verify HMAC integrity
-        val encryptedData = Base64.decode(share.encryptedPayload, Base64.NO_WRAP)
-        val expectedHmac = hmacEngine.computeHmacSha256(encryptedData, hmacKey)
-        
-        if (!hmacEngine.constantTimeEquals(Base64.decode(share.hmac, Base64.NO_WRAP), expectedHmac)) {
-            throw SecurityException("Shared credential integrity check failed")
-        }
-
-        // 2. Decrypt using Tink's HybridDecrypt
-        val hybridDecrypt = privateKeysetHandle.getPrimitive(HybridDecrypt::class.java)
+    /** Decrypts a received share using this device's private keyset. */
+    suspend fun receiveCredential(context: Context, share: SharedCredential): String {
+        val privateHandle = getPrivateKeysetHandle(context)
+        val hybridDecrypt = privateHandle.getPrimitive(HybridDecrypt::class.java)
         val contextInfo = "${share.senderUserId}:${share.recipientUserId}".toByteArray()
-        val decrypted = hybridDecrypt.decrypt(encryptedData, contextInfo)
-
-        return String(decrypted, Charsets.UTF_8)
+        val encrypted = Base64.decode(share.encryptedPayload, Base64.NO_WRAP)
+        return String(hybridDecrypt.decrypt(encrypted, contextInfo), Charsets.UTF_8)
     }
 
     private suspend fun fetchPublicKey(userId: String): String? {
         val doc = firestore.collection(COLLECTION_KEYS).document(userId).get().await()
         return doc.getString("publicKey")
-    }
-
-    /**
-     * Generates a new X25519 key pair and registers the public component.
-     */
-    suspend fun registerMyKeys(userId: String, deviceId: String): KeysetHandle {
-        val privateKeysetHandle = KeysetHandle.generateNew(
-            KeyTemplates.get("ECIES_P256_HKDF_HMAC_SHA256_AES128_GCM")
-        )
-        val publicKeysetHandle = privateKeysetHandle.publicKeysetHandle
-
-        val outputStream = ByteArrayOutputStream()
-        publicKeysetHandle.writeNoSecret(BinaryKeysetWriter.withOutputStream(outputStream))
-        val publicKeyBase64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
-
-        val keyData = mapOf(
-            "userId" to userId,
-            "publicKey" to publicKeyBase64,
-            "deviceId" to deviceId
-        )
-
-        firestore.collection(COLLECTION_KEYS).document(userId).set(keyData).await()
-        return privateKeysetHandle
     }
 }

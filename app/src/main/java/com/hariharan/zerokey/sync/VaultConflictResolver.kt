@@ -90,6 +90,8 @@ class VaultConflictResolver(
         }
     }
 
+    fun mergeJson(remoteJson: String, localJson: String): String = mergeVaultJson(remoteJson, localJson)
+
     private fun mergeVaultJson(remoteJson: String, localJson: String): String {
         val json = Json { ignoreUnknownKeys = true }
         val remoteEntities = json.decodeFromString(ListSerializer(PasswordEntity.serializer()), remoteJson)

@@ -11,6 +11,7 @@ class AuditLogManager(private val auditLogDao: AuditLogDao) {
     enum class EventType(val description: String) {
         VAULT_UNLOCKED("Vault Unlocked"),
         PASSWORD_VIEWED("Password Viewed"),
+        CREDENTIAL_SHARED("Credential Shared"),
         PASSWORD_COPIED("Password Copied"),
         VAULT_EXPORTED("Vault Exported"),
         AUTOFILL_USED("Autofill Used"),

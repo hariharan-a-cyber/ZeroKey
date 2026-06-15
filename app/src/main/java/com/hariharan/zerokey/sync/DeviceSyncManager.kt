@@ -38,7 +38,7 @@ class DeviceSyncManager(
         return try {
             PrivacyLogger.d(TAG, "Sync Push started for masked_UID: ${PrivacyLogger.mask(userId)}")
             
-            if (deviceTrustManager != null && !deviceTrustManager.isCurrentDeviceTrusted(userId)) {
+            if (deviceTrustManager != null && deviceTrustManager.isCurrentDeviceRevoked(userId)) {
                 return SyncResult.Failure("DEVICE_REVOKED: This device no longer has access to the vault.")
             }
 
@@ -58,14 +58,15 @@ class DeviceSyncManager(
             val currentVersion = getCurrentVersion(userId)
             val newVersion = currentVersion + 1
 
+            val deviceId = deviceTrustManager?.getCurrentDeviceId() ?: userId
             val timestamp = System.currentTimeMillis()
             val wrappedKeyB64 = wrappedKey?.cipherText?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } ?: ""
-            val hmacInput = buildHmacInput(userId, newVersion, timestamp, wrappedKeyB64, encryptedVault, vaultEpochId, previousSnapshotHmac ?: "")
+            val hmacInput = buildHmacInput(deviceId, newVersion, timestamp, wrappedKeyB64, encryptedVault, vaultEpochId, previousSnapshotHmac ?: "")
             val hmac = hmacEngine.computeHmacSha256(hmacInput, hmacKey)
             val hmacB64 = android.util.Base64.encodeToString(hmac, android.util.Base64.NO_WRAP)
 
             val blob = EncryptedVaultBlob(
-                deviceId = deviceTrustManager?.getCurrentDeviceId() ?: userId,
+                deviceId = deviceId,
                 vaultVersion = newVersion,
                 encryptedVault = android.util.Base64.encodeToString(encryptedVault.sliceArray(12 until encryptedVault.size), android.util.Base64.NO_WRAP),
                 iv = android.util.Base64.encodeToString(encryptedVault.sliceArray(0 until 12), android.util.Base64.NO_WRAP),
@@ -101,7 +102,7 @@ class DeviceSyncManager(
         lastKnownHmac: String? = null
     ): PullResult {
         return try {
-            if (deviceTrustManager != null && !deviceTrustManager.isCurrentDeviceTrusted(userId)) {
+            if (deviceTrustManager != null && deviceTrustManager.isCurrentDeviceRevoked(userId)) {
                 return PullResult.Failure("DEVICE_REVOKED: Access denied.")
             }
 
@@ -158,8 +159,10 @@ class DeviceSyncManager(
             val decryptedBytes = cryptoEngine.decryptAesGcm(combined, encryptionKey)
             val remoteJson = String(decryptedBytes, Charsets.UTF_8)
 
-            val localBlob = if (localVaultJson != null) null else null
-            return conflictResolver.resolve(remoteBlob, localBlob, encryptionKey, hmacKey)
+            // Merge remote with local so local edits/additions are never lost.
+            val mergedJson = if (localVaultJson.isNullOrBlank()) remoteJson
+                             else conflictResolver.mergeJson(remoteJson, localVaultJson)
+            return PullResult.Success(mergedJson, remoteBlob.vaultVersion, remoteBlob.hmac)
 
         } catch (e: Exception) {
             PrivacyLogger.e(TAG, "Pull failed: ${PrivacyLogger.sanitizeError(e.message)}")

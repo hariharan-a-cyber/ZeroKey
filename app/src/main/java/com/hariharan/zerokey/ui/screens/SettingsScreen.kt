@@ -45,6 +45,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.hariharan.zerokey.core.security.MasterPasswordManager
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
+import com.hariharan.zerokey.utils.SecureClipboard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,6 +114,7 @@ fun SettingsScreen(
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                AutofillSetupCard()
                 Text(
                     "Security Policy",
                     style = MaterialTheme.typography.labelLarge,
@@ -233,6 +235,7 @@ fun SettingsScreen(
                             onCheckedChange = {
                                 lockOnExit = it
                                 masterPasswordManager.setLockOnExit(context, it)
+                                Toast.makeText(context, if (it) "Lock on exit enabled" else "Lock on exit disabled", Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
@@ -574,8 +577,7 @@ fun SettingsScreen(
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 4.dp),
                         onClick = {
-                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                            cm.setPrimaryClip(android.content.ClipData.newPlainText("ZeroKey Recovery", recoveryCodeShown ?: ""))
+                            SecureClipboard.copy(context, "ZeroKey", recoveryCodeShown ?: "")
                             Toast.makeText(context, "Copied. Store it safely.", Toast.LENGTH_SHORT).show()
                             recoveryCodeShown = null
                         }
@@ -595,28 +597,48 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         showRotationConfirm = false
-                        isRotating = true
-                        viewModel.rotateVaultKey(context) { success ->
-                            isRotating = false
-                            if (success) {
-                                // Rotation changed the vault key: old recovery + biometric copies are stale.
-                                masterPasswordManager.clearRecoveryBlobLocal(context)
-                                biometricUnlockManager.clear()
-                                FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
-                                    FirebaseFirestore.getInstance().collection("users").document(uid).update(
-                                        "recoveryWrappedVaultKey", com.google.firebase.firestore.FieldValue.delete(),
-                                        "recoveryIv", com.google.firebase.firestore.FieldValue.delete()
-                                    )
+                        val activity = context as? androidx.fragment.app.FragmentActivity
+                        val runRotation = {
+                            isRotating = true
+                            viewModel.rotateVaultKey(context) { success ->
+                                isRotating = false
+                                if (success) {
+                                    // Rotation changed the vault key: old recovery + biometric copies are stale.
+                                    masterPasswordManager.clearRecoveryBlobLocal(context)
+                                    biometricUnlockManager.clear()
+                                    FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
+                                        FirebaseFirestore.getInstance().collection("users").document(uid).update(
+                                            "recoveryWrappedVaultKey", com.google.firebase.firestore.FieldValue.delete(),
+                                            "recoveryIv", com.google.firebase.firestore.FieldValue.delete()
+                                        )
+                                    }
+                                    Toast.makeText(context, "Vault Key Rotated. Re-create your recovery key.", Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "Rotation Failed", Toast.LENGTH_LONG).show()
                                 }
-                                Toast.makeText(context, "Vault Key Rotated. Re-create your recovery key.", Toast.LENGTH_LONG).show()
-                            } else {
-                                Toast.makeText(context, "Rotation Failed", Toast.LENGTH_LONG).show()
                             }
+                        }
+
+                        if (biometricUnlockManager.isSupported() && activity != null) {
+                            biometricUnlockManager.unlock(activity) { rawKey ->
+                                if (rawKey != null) {
+                                    java.util.Arrays.fill(rawKey, 0)
+                                    runRotation()
+                                } else {
+                                    Toast.makeText(context, "Authentication required", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        } else {
+                            runRotation()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text("Rotate Now")
+                    if (isRotating) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color.White)
+                    } else {
+                        Text("Rotate Now")
+                    }
                 }
             },
             dismissButton = {

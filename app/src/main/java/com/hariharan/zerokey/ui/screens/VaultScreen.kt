@@ -31,6 +31,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.biometric.BiometricPrompt
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.security.SecurityEventManager
+import com.hariharan.zerokey.utils.SecureClipboard
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -543,12 +544,8 @@ fun PasswordItemCard(item: PasswordItem, viewModel: PasswordViewModel) {
             Row {
                 IconButton(
                     onClick = {
-                        copyToClipboard(context, item.password)
+                        SecureClipboard.copy(context, "ZeroKey", item.password)
                         viewModel.logPasswordCopied(item.serviceName)
-                        coroutineScope.launch {
-                            delay(30000)
-                            clearClipboard(context)
-                        }
                     },
                     colors = IconButtonDefaults.iconButtonColors(
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)

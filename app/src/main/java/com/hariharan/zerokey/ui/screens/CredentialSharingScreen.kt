@@ -198,10 +198,13 @@ fun CredentialSharingScreen(
                 Button(
                     onClick = {
                         selectedCredentialId?.let { id ->
-                            viewModel.shareCredential(userId, recipientId, id)
-                            Toast.makeText(context, "Secure share initialized", Toast.LENGTH_SHORT).show()
-                            recipientId = ""
-                            selectedCredentialId = null
+                            viewModel.shareCredential(userId, recipientId, id) { ok, msg ->
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                if (ok) {
+                                    recipientId = ""
+                                    selectedCredentialId = null
+                                }
+                            }
                         }
                     },
                     modifier = Modifier

@@ -38,6 +38,10 @@ fun SecurityDashboardScreen(
     val report = viewModel.securityReport
     val surfaceColor = MaterialTheme.colorScheme.surface
 
+    LaunchedEffect(Unit) {
+        viewModel.ensureSecurityReport()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()

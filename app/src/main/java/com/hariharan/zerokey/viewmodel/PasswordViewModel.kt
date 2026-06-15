@@ -124,6 +124,18 @@ class PasswordViewModel @Inject constructor(
         }
     }
 
+    /** Builds the security report if it is missing (used when opening the dashboard). */
+    fun ensureSecurityReport() {
+        if (securityReport != null) return
+        viewModelScope.launch {
+            try {
+                updateSecurityReport()
+            } catch (e: Exception) {
+                securityReport = VaultSecurityReport(0, emptyList(), emptyList(), emptyList(), emptyList())
+            }
+        }
+    }
+
     private suspend fun updateSecurityReport() {
         val vaultKey = masterPasswordManager.getVaultKey()
         if (vaultKey != null) {
@@ -336,15 +348,20 @@ class PasswordViewModel @Inject constructor(
         }
     }
 
-    fun shareCredential(senderId: String, recipientId: String, credentialId: Int) {
+    fun shareCredential(senderId: String, recipientId: String, credentialId: Int, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            val item = allPasswords.find { it.id == credentialId } ?: return@launch
-            val vaultKey = masterPasswordManager.getVaultKey() ?: return@launch
-            val hmacKey = vaultKey.encoded // Simplified
-            
-            val payload = Json.encodeToString(PasswordItem.serializer(), item)
-            shareManager?.shareCredential(senderId, recipientId, payload, hmacKey)
-            auditLogManager.log(AuditLogManager.EventType.PASSWORD_VIEWED, "Shared credential ${item.serviceName} with $recipientId")
+            try {
+                if (recipientId.isBlank()) return@launch onResult(false, "Enter a recipient ID")
+                val item = allPasswords.find { it.id == credentialId }
+                    ?: return@launch onResult(false, "Credential not found")
+                val manager = shareManager ?: return@launch onResult(false, "Sharing is unavailable")
+                val payload = Json.encodeToString(PasswordItem.serializer(), item)
+                manager.shareCredential(senderId, recipientId, payload)
+                auditLogManager.log(AuditLogManager.EventType.CREDENTIAL_SHARED, "Shared ${item.serviceName}")
+                onResult(true, "Shared securely")
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Share failed")
+            }
         }
     }
 

@@ -462,13 +462,14 @@ class ZeroKeyAutofillService : AutofillService() {
         val webDomain: String?
     )
 
+    @Synchronized
     private fun isThrottled(packageName: String): Boolean {
         val now = System.currentTimeMillis()
         val history = requestHistory.getOrPut(packageName) { mutableListOf() }
         history.removeIf { it < now - WINDOW_MS }
-        
+
         if (history.size >= MAX_REQUESTS_PER_WINDOW) return true
-        
+
         history.add(now)
         return false
     }

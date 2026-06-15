@@ -34,8 +34,14 @@ class PasswordEntropyAnalyzer {
             else -> rawEntropy
         }
 
-        val strength = strengthFromEntropy(adjustedEntropy)
-        return EntropyResult(password.take(3) + "***", adjustedEntropy, strength, warnings)
+        // Short passwords can never be "strong" regardless of character variety.
+        val lengthCappedEntropy = when {
+            password.length < 8 -> minOf(adjustedEntropy, 35f)
+            password.length < 12 -> minOf(adjustedEntropy, 70f)
+            else -> adjustedEntropy
+        }
+        val strength = strengthFromEntropy(lengthCappedEntropy)
+        return EntropyResult(password.take(3) + "***", lengthCappedEntropy, strength, warnings)
     }
 
     private fun computePoolSize(password: String): Int {
@@ -47,8 +53,11 @@ class PasswordEntropyAnalyzer {
         return pool.coerceAtLeast(1)
     }
 
-    private fun hasCommonPattern(password: String): Boolean =
-        COMMON_PATTERNS.any { password.lowercase().contains(it) }
+    private fun hasCommonPattern(password: String): Boolean {
+        val lower = password.lowercase()
+        // Only penalize if a common word makes up most of the password (not just appears in a long random one).
+        return COMMON_PATTERNS.any { lower.contains(it) && it.length >= password.length - 3 }
+    }
 
     private fun hasKeyboardWalk(password: String): Boolean {
         val walks = listOf("qwerty", "asdfgh", "zxcvbn", "123456", "234567")

@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.utils.PasswordUtils
+import com.hariharan.zerokey.utils.SecureClipboard
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.ClipData
@@ -127,9 +128,7 @@ fun PasswordGeneratorScreen(
                                 Icon(Icons.Default.Refresh, "Regenerate")
                             }
                             IconButton(onClick = { 
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = ClipData.newPlainText("generated_password", generatedPassword)
-                                clipboard.setPrimaryClip(clip)
+                                SecureClipboard.copy(context, "ZeroKey", generatedPassword)
                                 Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
                             }) {
                                 Icon(Icons.Default.ContentCopy, "Copy")
