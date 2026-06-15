@@ -1,20 +1,31 @@
 package com.hariharan.zerokey.ui.screens
 
+import android.os.Build
+import android.provider.MediaStore
+import android.content.ContentValues
+import android.os.Environment
 import android.widget.Toast
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -22,7 +33,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
+import java.io.File
+import java.io.FileOutputStream
+import kotlinx.coroutines.launch
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import com.hariharan.zerokey.core.security.MasterPasswordManager
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
 
@@ -31,19 +51,25 @@ import com.hariharan.zerokey.viewmodel.PasswordViewModel
 fun SettingsScreen(
     viewModel: PasswordViewModel,
     masterPasswordManager: MasterPasswordManager,
+    biometricUnlockManager: com.hariharan.zerokey.security.BiometricVaultUnlockManager,
     onBack: () -> Unit,
-    onManageDevices: () -> Unit
+    onManageDevices: () -> Unit,
+    onSignOut: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val surfaceColor = MaterialTheme.colorScheme.surface
     
     var currentTimeout by remember { mutableStateOf(masterPasswordManager.getAuthTimeout(context)) }
     var lockOnExit by remember { mutableStateOf(masterPasswordManager.shouldLockOnExit(context)) }
+    var bioEnabled by remember { mutableStateOf(biometricUnlockManager.isEnrolled()) }
+    var recoveryCodeShown by remember { mutableStateOf<String?>(null) }
     var showTimeoutDialog by remember { mutableStateOf(false) }
     var showRotationConfirm by remember { mutableStateOf(false) }
     var showPasswordChange by remember { mutableStateOf(false) }
     var isRotating by remember { mutableStateOf(false) }
     var isChangingPassword by remember { mutableStateOf(false) }
+    var showRecoveryWarnDialog by remember { mutableStateOf(false) }
 
     val timeoutOptions = listOf(
         TimeoutOption("Always Require", 0L),
@@ -66,6 +92,7 @@ fun SettingsScreen(
         },
         containerColor = Color.Transparent
     ) { padding ->
+        val scrollState = rememberScrollState()
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -82,13 +109,71 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(scrollState)
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
                     "Security Policy",
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                  color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
                 )
 
@@ -155,6 +240,51 @@ fun SettingsScreen(
 
                 Surface(
                     shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Biometric Unlock", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "Open your vault with fingerprint/face on this device. Your master password still controls and recovers the vault.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = bioEnabled,
+                            onCheckedChange = { wantOn ->
+                                val activity = context as? FragmentActivity
+                                if (wantOn) {
+                                    val raw = masterPasswordManager.getVaultKey()?.encoded
+                                    if (activity == null || raw == null) {
+                                        Toast.makeText(context, "Unlock the vault first.", Toast.LENGTH_SHORT).show()
+                                    } else if (!biometricUnlockManager.isSupported()) {
+                                        Toast.makeText(context, "Biometric unlock needs Android 11+ with biometrics enrolled.", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        biometricUnlockManager.enroll(activity, raw) { ok ->
+                                            java.util.Arrays.fill(raw, 0)
+                                            bioEnabled = ok
+                                            Toast.makeText(context, if (ok) "Biometric unlock enabled." else "Could not enable biometric unlock.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                } else {
+                                    biometricUnlockManager.clear()
+                                    bioEnabled = false
+                                    Toast.makeText(context, "Biometric unlock disabled.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                     onClick = { showPasswordChange = true }
                 ) {
@@ -194,6 +324,34 @@ fun SettingsScreen(
                             Text("Manage Trusted Devices", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
                             Text(
                                 text = "Audit or revoke vault access.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    onClick = {
+                        if (masterPasswordManager.getVaultKey() == null) {
+                            Toast.makeText(context, "Unlock the vault first.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            showRecoveryWarnDialog = true
+                        }
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Security, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Recovery Key", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "Generate a one-time code to reset a forgotten master password without losing data. Save it somewhere safe.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -244,8 +402,187 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
+
+                Spacer(Modifier.height(16.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.1f),
+                    onClick = {
+                        scope.launch {
+                            viewModel.lockVault()
+                            masterPasswordManager.lockVault()
+                            onSignOut()
+                        }
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.ExitToApp, null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(16.dp))
+                        Column {
+                            Text("Sign Out", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                            Text(
+                                text = "Lock your vault and return to login.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                }
             }
         }
+    }
+
+    if (showRecoveryWarnDialog) {
+        AlertDialog(
+            onDismissRequest = { showRecoveryWarnDialog = false },
+            icon = { Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Generate New Recovery Keys?") },
+            text = {
+                Text("This will create 5 new recovery keys. Each code is 32 characters long and can be used once to reset your password. Your previous recovery keys will stop working immediately.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRecoveryWarnDialog = false
+                        val material = masterPasswordManager.createRecoveryMaterial()
+                        masterPasswordManager.saveRecoveryBlobLocal(context, material.blobs)
+                        FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
+                            FirebaseFirestore.getInstance().collection("users").document(uid).set(
+                                mapOf(
+                                    "recoveryBlobs" to material.blobs.map { mapOf("blob" to it.blobB64, "iv" to it.ivB64) }
+                                ),
+                                SetOptions.merge()
+                            )
+                        }
+                        recoveryCodeShown = material.recoveryCode
+                    }
+                ) {
+                    Text("Generate New Keys")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRecoveryWarnDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (recoveryCodeShown != null) {
+        AlertDialog(
+            onDismissRequest = { recoveryCodeShown = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+            modifier = Modifier.fillMaxWidth(0.95f),
+            icon = { Icon(Icons.Default.Security, null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Your Recovery Keys") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Save these codes safely to reset your master password.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    Text(
+                        "Note: Each line is a SEPARATE 32-character key. Enter ONE code fully to recover.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    Text(
+                        "If BOTH password and ALL recovery codes are lost, there is NO way to recover your vault.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            recoveryCodeShown?.split("-")?.forEach { segment ->
+                                Text(
+                                    segment,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    ),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    TextButton(
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp),
+                        onClick = {
+                            try {
+                                val userEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown Account"
+                                val fileName = "zerokey-vault-recovery-key.txt"
+                                val content = "Recovery Keys for ZeroKey Account: $userEmail\n" +
+                                        "Each 32-character code can be used once to recover your vault.\n\n" +
+                                        recoveryCodeShown?.split("-")?.joinToString("\n")
+                                
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    val resolver = context.contentResolver
+                                    val contentValues = ContentValues().apply {
+                                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                                        put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                    }
+                                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                                    uri?.let {
+                                        resolver.openOutputStream(it)?.use { stream ->
+                                            stream.write(content.toByteArray())
+                                        }
+                                        Toast.makeText(context, "Saved to Downloads folder", Toast.LENGTH_LONG).show()
+                                    }
+                                } else {
+                                    val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), fileName)
+                                    FileOutputStream(file).use { it.write(content.toByteArray()) }
+                                    Toast.makeText(context, "Saved to ${file.absolutePath}", Toast.LENGTH_LONG).show()
+                                }
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) { Text("Download", style = MaterialTheme.typography.labelMedium) }
+                    
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp),
+                        onClick = {
+                            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("ZeroKey Recovery", recoveryCodeShown ?: ""))
+                            Toast.makeText(context, "Copied. Store it safely.", Toast.LENGTH_SHORT).show()
+                            recoveryCodeShown = null
+                        }
+                    ) { Text("Copy & Close", style = MaterialTheme.typography.labelMedium) }
+                }
+            }
+        )
     }
 
     if (showRotationConfirm) {
@@ -262,7 +599,16 @@ fun SettingsScreen(
                         viewModel.rotateVaultKey(context) { success ->
                             isRotating = false
                             if (success) {
-                                Toast.makeText(context, "Vault Key Rotated Successfully", Toast.LENGTH_LONG).show()
+                                // Rotation changed the vault key: old recovery + biometric copies are stale.
+                                masterPasswordManager.clearRecoveryBlobLocal(context)
+                                biometricUnlockManager.clear()
+                                FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
+                                    FirebaseFirestore.getInstance().collection("users").document(uid).update(
+                                        "recoveryWrappedVaultKey", com.google.firebase.firestore.FieldValue.delete(),
+                                        "recoveryIv", com.google.firebase.firestore.FieldValue.delete()
+                                    )
+                                }
+                                Toast.makeText(context, "Vault Key Rotated. Re-create your recovery key.", Toast.LENGTH_LONG).show()
                             } else {
                                 Toast.makeText(context, "Rotation Failed", Toast.LENGTH_LONG).show()
                             }
@@ -282,6 +628,8 @@ fun SettingsScreen(
     if (showPasswordChange) {
         var newPass by remember { mutableStateOf("") }
         var confirmPass by remember { mutableStateOf("") }
+        var newPassVisible by remember { mutableStateOf(false) }
+        var confirmPassVisible by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<String?>(null) }
 
         AlertDialog(
@@ -294,14 +642,30 @@ fun SettingsScreen(
                         value = newPass,
                         onValueChange = { newPass = it },
                         label = { Text("New Master Password") },
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        visualTransformation = if (newPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { newPassVisible = !newPassVisible }) {
+                                Icon(
+                                    imageVector = if (newPassVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null
+                                )
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = confirmPass,
                         onValueChange = { confirmPass = it },
                         label = { Text("Confirm New Password") },
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        visualTransformation = if (confirmPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { confirmPassVisible = !confirmPassVisible }) {
+                                Icon(
+                                    imageVector = if (confirmPassVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null
+                                )
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     )
                     if (error != null) {
@@ -318,13 +682,16 @@ fun SettingsScreen(
                             error = "Passwords do not match"
                         } else {
                             isChangingPassword = true
-                            viewModel.changeMasterPassword(context, newPass) { success ->
+                            viewModel.changeMasterPassword(context, newPass) { result ->
                                 isChangingPassword = false
-                                if (success) {
-                                    showPasswordChange = false
-                                    Toast.makeText(context, "Master Password Updated", Toast.LENGTH_LONG).show()
-                                } else {
-                                    error = "Update failed"
+                                when (result) {
+                                    is com.hariharan.zerokey.security.AuthResult.Success -> {
+                                        showPasswordChange = false
+                                        Toast.makeText(context, "Master Password Updated", Toast.LENGTH_LONG).show()
+                                    }
+                                    is com.hariharan.zerokey.security.AuthResult.Error -> {
+                                        error = result.message
+                                    }
                                 }
                             }
                         }

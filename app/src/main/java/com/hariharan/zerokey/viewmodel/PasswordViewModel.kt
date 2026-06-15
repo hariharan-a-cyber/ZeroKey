@@ -47,8 +47,9 @@ class PasswordViewModel @Inject constructor(
     private val syncManager: DeviceSyncManager? = null,
     private val shareManager: CredentialShareManager? = null,
     private val emergencyManager: EmergencyAccessManager? = null,
-    private val privacyModeManager: PrivacyModeManager? = null,
-    private val deviceTrustManager: DeviceTrustManager? = null
+    private val privacyModeManager: PrivacyModeManager?,
+    private val deviceTrustManager: DeviceTrustManager?,
+    private val authenticator: FirebaseAuthenticator
 ) : ViewModel() {
 
     private var userId: String = "guest"
@@ -86,6 +87,7 @@ class PasswordViewModel @Inject constructor(
         private set
 
     var trustedDevices = mutableStateListOf<DeviceTrustManager.DeviceInfo>()
+    var isLoadingDevices by mutableStateOf(false)
         private set
 
     val keySecurityLevel: EncryptionManager.KeySecurityLevel
@@ -346,15 +348,22 @@ class PasswordViewModel @Inject constructor(
         }
     }
 
-    fun changeMasterPassword(context: Context, newPassword: String, onComplete: (Boolean) -> Unit) {
+    fun changeMasterPassword(context: Context, newPassword: String, onComplete: (AuthResult) -> Unit) {
         viewModelScope.launch {
             try {
-                masterPasswordManager.changeMasterPassword(context, newPassword.toCharArray())
-                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Master Password changed (Keys rotated)")
-                onComplete(true)
+                // 1. Update Firebase Password first (requires recent login)
+                val authResult = authenticator.updatePassword(newPassword)
+                
+                if (authResult is AuthResult.Success) {
+                    // 2. Update local vault key
+                    masterPasswordManager.changeMasterPassword(context, newPassword.toCharArray())
+                    auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Master Password changed (Keys rotated)")
+                }
+                
+                onComplete(authResult)
             } catch (e: Exception) {
                 PrivacyLogger.e("PasswordViewModel", "Password change failed", e)
-                onComplete(false)
+                onComplete(AuthResult.Error(e.message ?: "Unknown error"))
             }
         }
     }
@@ -395,12 +404,15 @@ class PasswordViewModel @Inject constructor(
     fun refreshDeviceList() {
         val manager = deviceTrustManager ?: return
         viewModelScope.launch {
+            isLoadingDevices = true
             try {
                 val devices = manager.getTrustedDevices(userId)
                 trustedDevices.clear()
                 trustedDevices.addAll(devices)
             } catch (e: Exception) {
                 PrivacyLogger.e("PasswordViewModel", "Failed to load device list", e)
+            } finally {
+                isLoadingDevices = false
             }
         }
     }

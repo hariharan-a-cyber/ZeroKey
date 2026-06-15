@@ -18,7 +18,11 @@ class BillingManager @Inject constructor(
 
     private val billingClient = BillingClient.newBuilder(context)
         .setListener(this)
-        .enablePendingPurchases()
+        .enablePendingPurchases(
+            com.android.billingclient.api.PendingPurchasesParams.newBuilder()
+                .enableOneTimeProducts()
+                .build()
+        )
         .build()
 
     private val _isPremium = MutableStateFlow(false)
@@ -58,7 +62,25 @@ class BillingManager @Inject constructor(
 
     override fun onPurchasesUpdated(billingResult: BillingResult, purchases: List<Purchase>?) {
         if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
-            _isPremium.value = purchases.any { it.purchaseState == Purchase.PurchaseState.PURCHASED }
+            for (purchase in purchases) {
+                handlePurchase(purchase)
+            }
+        }
+    }
+
+    private fun handlePurchase(purchase: Purchase) {
+        if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
+            _isPremium.value = true
+            if (!purchase.isAcknowledged) {
+                val params = AcknowledgePurchaseParams.newBuilder()
+                    .setPurchaseToken(purchase.purchaseToken)
+                    .build()
+                billingClient.acknowledgePurchase(params) { result ->
+                    if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+                        PrivacyLogger.e("Billing", "Acknowledge failed: ${result.debugMessage}")
+                    }
+                }
+            }
         }
     }
 }

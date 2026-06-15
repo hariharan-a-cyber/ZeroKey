@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -39,8 +40,14 @@ fun DeviceManagementScreen(
 ) {
     val context = LocalContext.current
     val devices = viewModel.trustedDevices
+    val isLoading = viewModel.isLoadingDevices
+    
     val currentDeviceId = remember { 
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) 
+    }
+    
+    LaunchedEffect(Unit) {
+        viewModel.refreshDeviceList()
     }
     
     var deviceToRevoke by remember { mutableStateOf<DeviceTrustManager.DeviceInfo?>(null) }
@@ -55,6 +62,11 @@ fun DeviceManagementScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { viewModel.refreshDeviceList() }, enabled = !isLoading) {
+                        Icon(Icons.Default.Refresh, "Refresh")
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Transparent)
@@ -75,9 +87,17 @@ fun DeviceManagementScreen(
                 )
                 .padding(padding)
         ) {
-            if (devices.isEmpty()) {
+            if (isLoading && devices.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
+                }
+            } else if (devices.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "No trusted devices found.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             } else {
                 LazyColumn(

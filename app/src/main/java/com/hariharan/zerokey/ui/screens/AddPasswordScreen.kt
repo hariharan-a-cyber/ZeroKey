@@ -11,6 +11,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +23,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.utils.PasswordStrength
@@ -121,6 +125,7 @@ fun AddPasswordScreen(
                         label = "Password",
                         placeholder = "••••••••",
                         keyboardType = KeyboardType.Password,
+                        isPassword = true,
                         trailingIcon = {
                             IconButton(onClick = onGenerateClick) {
                                 Icon(
@@ -211,8 +216,11 @@ fun AddTransparentTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
     capitalization: KeyboardCapitalization = KeyboardCapitalization.None,
     singleLine: Boolean = true,
+    isPassword: Boolean = false,
     trailingIcon: @Composable (() -> Unit)? = null
 ) {
+    var passwordVisible by remember { mutableStateOf(false) }
+    
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = label,
@@ -225,8 +233,21 @@ fun AddTransparentTextField(
             onValueChange = onValueChange,
             placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
             modifier = Modifier.fillMaxWidth(),
-            trailingIcon = trailingIcon,
+            trailingIcon = if (isPassword) {
+                {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null
+                            )
+                        }
+                        trailingIcon?.invoke()
+                    }
+                }
+            } else trailingIcon,
             singleLine = singleLine,
+            visualTransformation = if (isPassword && !passwordVisible) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(
                 keyboardType = keyboardType,
                 capitalization = capitalization

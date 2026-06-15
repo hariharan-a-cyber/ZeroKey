@@ -34,6 +34,8 @@ class MasterPasswordManager @Inject constructor(
         private const val KEY_AUTH_TIMEOUT = "auth_timeout"
         private const val KEY_CRYPTO_VERSION = "crypto_version"
         private const val KEY_LOCK_ON_EXIT = "lock_on_exit"
+        private const val KEY_RECOVERY_BLOB = "recovery_wrapped_vault_key"
+        private const val KEY_RECOVERY_IV = "recovery_iv"
         private const val DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS = 60_000L // 60 seconds
     }
 
@@ -128,6 +130,15 @@ class MasterPasswordManager @Inject constructor(
     fun getSessionKey(): SecretKeySpec? = vaultKey
 
     /**
+     * Sets the vault key in memory ONLY (no persistence), e.g. after a biometric unlock.
+     * The hardened on-disk wrapped vault key is unchanged.
+     */
+    fun restoreVaultKey(rawVaultKey: ByteArray) {
+        vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        lastUnlockTimestamp = System.currentTimeMillis()
+    }
+
+    /**
      * Wraps the current vault key with the master key for cloud backup/recovery.
      */
     fun getWrappedVaultKey(): EncryptedData? {
@@ -173,6 +184,127 @@ class MasterPasswordManager @Inject constructor(
         // 3. Update in memory
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
         rawVaultKey.fill(0)
+    }
+
+    // ---------- Recovery key (forgot-password reset without data loss) ----------
+
+    data class RecoveryBlob(val blobB64: String, val ivB64: String)
+
+    data class RecoveryMaterial(
+        val recoveryCode: String,
+        val blobs: List<RecoveryBlob>
+    )
+
+    /**
+     * Creates 5 independent recovery codes (32 chars each) and wraps the CURRENT vault key with them. 
+     * Vault must be unlocked. Caller stores blobs (cloud + local) and shows codes once.
+     */
+    fun createRecoveryMaterial(): RecoveryMaterial {
+        val vk = vaultKey ?: throw IllegalStateException("Vault must be unlocked")
+        val rawVaultKey = vk.encoded
+        val codes = mutableListOf<String>()
+        val blobs = mutableListOf<RecoveryBlob>()
+
+        repeat(5) {
+            val recBytes = ByteArray(16) // 128 bits = 32 hex chars
+            SecureRandom().nextBytes(recBytes)
+            val code = recBytes.joinToString("") { "%02X".format(it) }
+            val wrapped = encryptionManager.encryptWithKey(rawVaultKey, SecretKeySpec(recBytes, "AES"))
+            
+            codes.add(code)
+            blobs.add(RecoveryBlob(
+                Base64.encodeToString(wrapped.cipherText, Base64.NO_WRAP),
+                Base64.encodeToString(wrapped.iv, Base64.NO_WRAP)
+            ))
+        }
+        
+        SensitiveDataManager.clearSensitiveData(rawVaultKey)
+        return RecoveryMaterial(codes.joinToString("-"), blobs)
+    }
+
+    /**
+     * Recovers the vault using ONE of the recovery codes + the stored wrapped blobs.
+     * Trial-and-error decryption against all 5 blobs. Success on GCM tag match.
+     */
+    fun recoverWithRecoveryCode(
+        context: Context,
+        blobs: List<RecoveryBlob>,
+        recoveryCode: String,
+        newPassword: CharArray
+    ) {
+        encryptionManager.init()
+        val recBytes = parseRecoveryCode(recoveryCode)
+        val recoveryKeySpec = SecretKeySpec(recBytes, "AES")
+        
+        var rawVaultKey: ByteArray? = null
+        var lastError: Exception? = null
+
+        // Attempt to decrypt with EACH blob until one works (Zero-knowledge trial)
+        for (blob in blobs) {
+            try {
+                val wrapped = EncryptedData(
+                    Base64.decode(blob.blobB64, Base64.NO_WRAP),
+                    Base64.decode(blob.ivB64, Base64.NO_WRAP)
+                )
+                rawVaultKey = encryptionManager.decryptWithKey(wrapped, recoveryKeySpec)
+                if (rawVaultKey != null) break 
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+
+        if (rawVaultKey == null) {
+            recBytes.fill(0)
+            throw lastError ?: Exception("Invalid recovery key")
+        }
+        recBytes.fill(0)
+
+        val newSalt = keyDerivationManager.generateSalt()
+        val newVersion = KeyDerivationManager.LATEST_VERSION
+        val newMasterKey = keyDerivationManager.deriveKey(newPassword, newSalt, newVersion)
+        val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, newMasterKey)
+        val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
+
+        saveSalt(context, newSalt)
+        saveCryptoVersion(context, newVersion)
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+
+        masterKey = newMasterKey
+        vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        lastUnlockTimestamp = System.currentTimeMillis()
+
+        SensitiveDataManager.clearSensitiveData(newPassword)
+        rawVaultKey.fill(0)
+    }
+
+    fun saveRecoveryBlobLocal(context: Context, blobs: List<RecoveryBlob>) {
+        val combined = blobs.joinToString(";") { "${it.blobB64}|${it.ivB64}" }
+        getPrefs(context).edit()
+            .putString(KEY_RECOVERY_BLOB, combined)
+            .apply()
+    }
+
+    fun getLocalRecoveryBlobs(context: Context): List<RecoveryBlob> {
+        val combined = getStoredValue(context, KEY_RECOVERY_BLOB) ?: return emptyList()
+        return try {
+            combined.split(";").map {
+                val parts = it.split("|")
+                RecoveryBlob(parts[0], parts[1])
+            }
+        } catch (e: Exception) { emptyList() }
+    }
+
+    fun clearRecoveryBlobLocal(context: Context) {
+        getPrefs(context).edit().remove(KEY_RECOVERY_BLOB).remove(KEY_RECOVERY_IV).apply()
+    }
+
+    private fun formatRecoveryCode(bytes: ByteArray): String =
+        bytes.joinToString("") { "%02X".format(it) }.chunked(4).joinToString("-")
+
+    private fun parseRecoveryCode(code: String): ByteArray {
+        val hex = code.filter { it.isLetterOrDigit() }.uppercase()
+        val byteLen = hex.length / 2
+        return ByteArray(byteLen) { i -> hex.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
     }
 
     /**
@@ -287,11 +419,12 @@ class MasterPasswordManager @Inject constructor(
 
     private fun getPrefs(context: Context): android.content.SharedPreferences {
         cachedPrefs?.let { return it }
+        val appContext = context.applicationContext
         val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
         val prefs = EncryptedSharedPreferences.create(
             PREFS_NAME,
             masterKeyAlias,
-            context.applicationContext,
+            appContext,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )

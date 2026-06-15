@@ -3,6 +3,7 @@ package com.hariharan.zerokey.security
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 
@@ -66,6 +67,26 @@ class DeviceTrustManager(
             .await()
             
         return doc.getBoolean("trusted") ?: false
+    }
+
+    /**
+     * Returns true ONLY if this device has an explicit trust record set to false (revoked).
+     * Missing record, offline, or any error -> false, so we never lock a user out by accident.
+     */
+    suspend fun isCurrentDeviceRevoked(userId: String): Boolean {
+        return try {
+            val deviceId = getCurrentDeviceId()
+            val doc = firestore.collection("users")
+                .document(userId)
+                .collection(COLLECTION_DEVICES)
+                .document(deviceId)
+                .get()
+                .await()
+            doc.exists() && (doc.getBoolean("trusted") == false)
+        } catch (e: Exception) {
+            PrivacyLogger.e("DeviceTrustManager", "Trust check failed (offline?). Not locking.")
+            false
+        }
     }
 
     /**

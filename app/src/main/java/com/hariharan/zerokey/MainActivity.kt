@@ -26,6 +26,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
@@ -74,6 +75,8 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var deviceSyncManager: DeviceSyncManager
     @Inject lateinit var credentialShareManager: CredentialShareManager
     @Inject lateinit var deviceTrustManager: DeviceTrustManager
+    @Inject lateinit var biometricVaultUnlockManager: BiometricVaultUnlockManager
+    @Inject lateinit var authenticator: FirebaseAuthenticator
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,7 +92,7 @@ class MainActivity : FragmentActivity() {
         )
         
         enableEdgeToEdge()
-        val authenticator = FirebaseAuthenticator()
+        val authenticator = this.authenticator
 
         setContent {
             ZeroKeyTheme {
@@ -148,9 +151,16 @@ class MainActivity : FragmentActivity() {
                         authenticator = authenticator,
                         masterPasswordManager = masterPasswordManager,
                         authAttemptManager = authAttemptManager,
+                        biometricUnlockManager = biometricVaultUnlockManager,
                         onAuthSuccess = { 
                             isAuthenticated = true
                             masterPasswordManager.authorizeAutofill()
+                            // Register this device as trusted so remote-revocation can work later.
+                            lifecycleScope.launch {
+                                try {
+                                    authenticator.uid?.let { deviceTrustManager.registerCurrentDevice(it) }
+                                } catch (_: Exception) { /* offline is fine; not required to unlock */ }
+                            }
                             vaultCheckKey++
                         }
                     )
@@ -212,7 +222,7 @@ class MainActivity : FragmentActivity() {
                         // Security Hardening: Active Revocation Check
                         scope.launch {
                             val uid = authenticator.uid ?: "guest"
-                            if (masterPasswordManager.isUnlocked() && !deviceTrustManager.isCurrentDeviceTrusted(uid)) {
+                            if (masterPasswordManager.isUnlocked() && deviceTrustManager.isCurrentDeviceRevoked(uid)) {
                                 withContext(Dispatchers.Main) {
                                     masterPasswordManager.lockVault()
                                     viewModel.lockVault()
@@ -243,8 +253,13 @@ class MainActivity : FragmentActivity() {
             val uid = authenticator.uid ?: "guest"
             LaunchedEffect(uid) {
                 viewModel.setUserId(uid)
+                if (uid != "guest") {
+                    try {
+                        deviceTrustManager.registerCurrentDevice(uid)
+                    } catch (_: Exception) {}
+                }
             }
-            ZeroKeyApp(viewModel, syncViewModel, uid, masterPasswordManager)
+            ZeroKeyApp(viewModel, syncViewModel, uid, masterPasswordManager, biometricVaultUnlockManager, onRefreshVault)
         }
     }
 
@@ -276,7 +291,6 @@ fun ExitBackHandler() {
 @Composable
 fun BiometricLockScreen(authManager: AuthAttemptManager, onAuthenticated: () -> Unit) {
     val context = LocalContext.current as FragmentActivity
-    var isAuthenticating by remember { mutableStateOf(false) }
 
     ExitBackHandler()
 
@@ -288,66 +302,58 @@ fun BiometricLockScreen(authManager: AuthAttemptManager, onAuthenticated: () -> 
         return
     }
 
+    // Bump this to (re)launch the system prompt: once automatically, again on button tap.
+    var promptTrigger by remember { mutableStateOf(0) }
+
     Box(
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Default.Lock,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
+            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = { isAuthenticating = true }) {
+            Button(onClick = { promptTrigger++ }) {
                 Text("Unlock ZeroKey")
             }
         }
     }
 
-    if (isAuthenticating || !authManager.isLockedOut()) {
-        val executor = ContextCompat.getMainExecutor(context)
-        val biometricPrompt = remember {
-            BiometricPrompt(context, executor,
-                object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        super.onAuthenticationSucceeded(result)
-                        authManager.resetAttempts()
-                        isAuthenticating = false
-                        // Use a side-effect or small delay to ensure Compose state updates correctly
-                        onAuthenticated()
-                    }
-                    
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                        super.onAuthenticationError(errorCode, errString)
-                        isAuthenticating = false
-                        if (errorCode != BiometricPrompt.ERROR_USER_CANCELED && errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
-                            authManager.recordFailedAttempt()
-                            Toast.makeText(context, "Authentication error: $errString", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+    val executor = remember { ContextCompat.getMainExecutor(context) }
+    val biometricPrompt = remember {
+        BiometricPrompt(context, executor, object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                authManager.resetAttempts()
+                onAuthenticated()
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                if (errorCode != BiometricPrompt.ERROR_USER_CANCELED && errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
+                    authManager.recordFailedAttempt()
+                    Toast.makeText(context, "Authentication error: $errString", Toast.LENGTH_SHORT).show()
+                }
+            }
+        })
+    }
 
-                    override fun onAuthenticationFailed() {
-                        super.onAuthenticationFailed()
-                        // This is for "Wrong Fingerprint" (not a terminal error)
-                    }
-                })
+    val promptInfo = remember {
+        val builder = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("ZeroKey Unlock")
+            .setSubtitle("Authenticate to access your vault")
+        // BIOMETRIC_STRONG + DEVICE_CREDENTIAL is only allowed on API 30+.
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            builder.setAllowedAuthenticators(
+                androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            )
+        } else {
+            builder.setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            builder.setNegativeButtonText("Cancel")
         }
+        builder.build()
+    }
 
-        val promptInfo = remember {
-            BiometricPrompt.PromptInfo.Builder()
-                .setTitle("ZeroKey Unlock")
-                .setSubtitle("Authenticate to access your vault")
-                .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or 
-                                         androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-                .build()
-        }
-
-        LaunchedEffect(isAuthenticating) {
-            // Automatically prompt on first enter or when button clicked
-            biometricPrompt.authenticate(promptInfo)
-        }
+    // Auto-prompt on first entry (promptTrigger starts at 0), and again whenever it changes.
+    LaunchedEffect(promptTrigger) {
+        biometricPrompt.authenticate(promptInfo)
     }
 }
 
@@ -356,7 +362,9 @@ fun ZeroKeyApp(
     viewModel: PasswordViewModel, 
     syncViewModel: SyncViewModel,
     userId: String,
-    masterPasswordManager: MasterPasswordManager
+    masterPasswordManager: MasterPasswordManager,
+    biometricUnlockManager: com.hariharan.zerokey.security.BiometricVaultUnlockManager,
+    onSignOut: () -> Unit
 ) {
     val navController = rememberNavController()
     var generatedPasswordToUse by remember { mutableStateOf<String?>(null) }
@@ -467,8 +475,10 @@ fun ZeroKeyApp(
             SettingsScreen(
                 viewModel = viewModel,
                 masterPasswordManager = masterPasswordManager,
+                biometricUnlockManager = biometricUnlockManager,
                 onBack = { navController.popBackStack() },
-                onManageDevices = { navController.navigate(Screen.DeviceManagement.route) }
+                onManageDevices = { navController.navigate(Screen.DeviceManagement.route) },
+                onSignOut = onSignOut
             )
         }
         composable(Screen.DeviceManagement.route) {

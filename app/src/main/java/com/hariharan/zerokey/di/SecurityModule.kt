@@ -64,6 +64,12 @@ object SecurityModule {
 
     @Provides
     @Singleton
+    fun provideBiometricVaultUnlockManager(@ApplicationContext context: Context):
+        com.hariharan.zerokey.security.BiometricVaultUnlockManager =
+        com.hariharan.zerokey.security.BiometricVaultUnlockManager(context)
+
+    @Provides
+    @Singleton
     fun providePasswordDatabase(@ApplicationContext context: Context): PasswordDatabase = PasswordDatabase.getDatabase(context)
 
     @Provides
@@ -133,6 +139,11 @@ object SecurityModule {
         repository: PasswordRepository,
         serializer: VaultSerializer
     ): VaultBackupManager = VaultBackupManager(repository, serializer)
+
+    @Provides
+    @Singleton
+    fun provideFirebaseAuthenticator(): com.hariharan.zerokey.security.FirebaseAuthenticator = 
+        com.hariharan.zerokey.security.FirebaseAuthenticator()
 
     @Provides
     @Singleton

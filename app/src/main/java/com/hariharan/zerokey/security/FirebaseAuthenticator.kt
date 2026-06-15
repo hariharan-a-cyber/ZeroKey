@@ -95,14 +95,17 @@ class FirebaseAuthenticator {
             val result = credentialManager.getCredential(context, request)
             handleGoogleCredential(result)
         } catch (e: NoCredentialException) {
-            PrivacyLogger.e("FirebaseAuthenticator", "CRITICAL ERROR: No credentials found. Check Test User list in Google Cloud Console.")
-            null
+            val errorMsg = "GOOGLE_ERROR: No matching accounts found. (1. Check Web Client ID: $serverClientId, 2. Check if a Google account is logged into this phone, 3. Check if your local SHA-1 fingerprint matches Firebase)"
+            PrivacyLogger.e("FirebaseAuthenticator", errorMsg)
+            throw Exception(errorMsg)
         } catch (e: GetCredentialException) {
-            PrivacyLogger.e("FirebaseAuthenticator", "Credential Manager Error: ${e.type} - ${e.message}")
-            null
+            val errorMsg = "GOOGLE_ERROR: [${e.type}] ${e.message}"
+            PrivacyLogger.e("FirebaseAuthenticator", errorMsg)
+            throw Exception(errorMsg)
         } catch (e: Exception) {
-            PrivacyLogger.e("FirebaseAuthenticator", "Unexpected Error: ${e.message}", e)
-            null
+            val errorMsg = "GOOGLE_ERROR: ${e.message ?: "Unknown fatal error"}"
+            PrivacyLogger.e("FirebaseAuthenticator", errorMsg)
+            throw Exception(errorMsg)
         }
     }
 
@@ -139,6 +142,23 @@ class FirebaseAuthenticator {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())
         } catch (e: Exception) {
             PrivacyLogger.e("FirebaseAuthenticator", "Clear credential state failed", e)
+        }
+    }
+
+    /**
+     * Updates the user's password in Firebase.
+     * User must have a recent login for this to succeed.
+     */
+    suspend fun updatePassword(newPassword: String): AuthResult {
+        return try {
+            val user = auth.currentUser ?: return AuthResult.Error("No user logged in")
+            user.updatePassword(newPassword).await()
+            AuthResult.Success(user)
+        } catch (e: com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException) {
+            AuthResult.Error("Security: Please sign out and sign back in before changing your password.")
+        } catch (e: Exception) {
+            PrivacyLogger.e("FirebaseAuthenticator", "UpdatePassword failed: ${e.message}")
+            AuthResult.Error("Failed to update account password. Check your connection.")
         }
     }
 }

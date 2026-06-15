@@ -549,7 +549,6 @@ fun PasswordItemCard(item: PasswordItem, viewModel: PasswordViewModel) {
                             delay(30000)
                             clearClipboard(context)
                         }
-                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
                     },
                     colors = IconButtonDefaults.iconButtonColors(
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -595,6 +594,7 @@ private fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val clip = ClipData.newPlainText("ZeroKey_Password", text)
     clipboard.setPrimaryClip(clip)
+    Toast.makeText(context, "Copied. Clearing in 30s.", Toast.LENGTH_SHORT).show()
 }
 
 private fun clearClipboard(context: Context) {
