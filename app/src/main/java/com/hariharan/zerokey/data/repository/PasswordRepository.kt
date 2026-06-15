@@ -128,6 +128,12 @@ class PasswordRepository @Inject constructor(
         val vaultKey = masterPasswordManager.getVaultKey() 
             ?: throw IllegalStateException("Vault must be unlocked before saving passwords")
 
+        // Safety: never persist a decryption-error placeholder as if it were real data.
+        val placeholders = setOf("[Decryption Error]", "[Vault Locked]")
+        require(password !in placeholders && service !in placeholders && username !in placeholders) {
+            "Refusing to save a decryption-error placeholder over real data"
+        }
+
         // If updating, preserve original creation time and favorite status
         var existingEntity: PasswordEntity? = null
         if (id != 0) {
@@ -171,77 +177,49 @@ class PasswordRepository @Inject constructor(
 
     /**
      * Generates a new random Vault Key and re-encrypts all entries.
-     * Use for emergency recovery or compromised device scenarios.
+     * Safe order: read all plaintext with the OLD key, abort if any record is corrupt,
+     * install the new key, then re-encrypt everything with the new key.
      */
     suspend fun rotateVaultKey(context: Context) = withContext(Dispatchers.IO) {
-        val oldVaultKey = masterPasswordManager.getVaultKey()
+        masterPasswordManager.getVaultKey()
             ?: throw IllegalStateException("Vault must be unlocked")
-        
-        // 1. Generate NEW random 256-bit Vault Key
-        val rawNewKey = ByteArray(32)
-        SecureRandom().nextBytes(rawNewKey)
-        val newVaultKey = SecretKeySpec(rawNewKey, "AES")
 
-        // 2. Load and Re-encrypt every item
-        val items = getPasswords()
-        items.forEach { item ->
-            val service = item.serviceName
-            val username = item.username
-            val password = item.password
-            val notes = item.notes
-            
-            // Re-save using the new in-memory temporary key
-            // (We'll update MasterPasswordManager at the end)
-            saveWithSpecificKey(service, username, password, notes, item.id, newVaultKey, item.toEntity())
+        data class Plain(val id: Int, val service: String, val username: String, val password: String, val notes: String?)
+
+        // 1. Materialize ALL plaintext using the CURRENT vault key first.
+        val plaintext = getPasswords().map { item ->
+            Plain(item.id, item.serviceName, item.username, item.password, item.notes)
         }
 
-        // 3. Update masterPasswordManager to use and persist the new key
-        val wrappedNewKey = encryptionManager.encryptWithKey(rawNewKey, masterPasswordManager.getSessionKey()!!)
-        masterPasswordManager.importVaultKey(context, wrappedNewKey)
-        
-        // 4. Reset Epoch for a clean cryptographic break
+        // 2. Abort if any record failed to decrypt (never re-encrypt error placeholders).
+        val corrupt = plaintext.any {
+            it.service == "[Decryption Error]" || it.service == "[Vault Locked]" ||
+            it.password == "[Decryption Error]" || it.password == "[Vault Locked]"
+        }
+        if (corrupt) throw IllegalStateException("Aborting rotation: some records could not be decrypted")
+
+        // 3. Generate and install a NEW random 256-bit Vault Key.
+        val rawNewKey = ByteArray(32)
+        SecureRandom().nextBytes(rawNewKey)
+        masterPasswordManager.installNewVaultKey(context, rawNewKey)
+        rawNewKey.fill(0)
+
+        // 4. Re-encrypt every record with the now-active new vault key.
+        plaintext.forEach { rec ->
+            savePassword(rec.service, rec.username, rec.password, rec.notes, rec.id)
+        }
+
+        // 5. Reset epoch for a clean cryptographic break.
         val newEpoch = java.util.UUID.randomUUID().toString()
         val current = vaultMetadataDao?.getMetadata()
         if (current != null) {
             vaultMetadataDao.updateMetadata(current.copy(
                 vaultEpochId = newEpoch,
-                vaultVersion = 0, // Reset version for new epoch
-                lastKnownHmac = null // Reset chain
+                vaultVersion = 0,
+                lastKnownHmac = null
             ))
         } else {
             vaultMetadataDao?.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = newEpoch))
         }
-        
-        rawNewKey.fill(0)
-    }
-
-    private suspend fun saveWithSpecificKey(
-        service: String, 
-        username: String, 
-        password: String, 
-        notes: String?, 
-        id: Int, 
-        key: SecretKeySpec,
-        existing: PasswordEntity
-    ) {
-        val aad = "v${existing.encryptionVersion}|s${existing.schemaVersion}|${existing.recordUid}|${existing.createdAt}".toByteArray(Charsets.UTF_8)
-        
-        val serviceNameEnc = encryptionManager.encryptWithKey(service.toByteArray(), key, aad)
-        val usernameEnc = encryptionManager.encryptWithKey(username.toByteArray(), key, aad)
-        val passwordEnc = encryptionManager.encryptWithKey(password.toByteArray(), key, aad)
-        val notesEnc = notes?.let { encryptionManager.encryptWithKey(it.toByteArray(), key, aad) }
-
-        val entity = existing.copy(
-            encryptedServiceName = Base64.encodeToString(serviceNameEnc.cipherText, Base64.NO_WRAP),
-            serviceNameIv = Base64.encodeToString(serviceNameEnc.iv, Base64.NO_WRAP),
-            encryptedUsername = Base64.encodeToString(usernameEnc.cipherText, Base64.NO_WRAP),
-            usernameIv = Base64.encodeToString(usernameEnc.iv, Base64.NO_WRAP),
-            encryptedPassword = Base64.encodeToString(passwordEnc.cipherText, Base64.NO_WRAP),
-            passwordIv = Base64.encodeToString(passwordEnc.iv, Base64.NO_WRAP),
-            encryptedNotes = notesEnc?.let { Base64.encodeToString(it.cipherText, Base64.NO_WRAP) },
-            notesIv = notesEnc?.let { Base64.encodeToString(it.iv, Base64.NO_WRAP) },
-            lastModified = System.currentTimeMillis()
-        )
-        passwordDao.insertPassword(entity)
     }
 }

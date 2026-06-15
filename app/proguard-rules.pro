@@ -42,3 +42,18 @@
 # Keep security classes (don't obfuscate crypto logic names — it breaks references)
 -keep class com.hariharan.zerokey.security.MasterPasswordManager { *; }
 -keep class com.hariharan.zerokey.security.EncryptionManager { *; }
+
+# Keep Firestore model fields (mapped by name)
+-keepclassmembers class com.hariharan.zerokey.** {
+  <fields>;
+}
+-keep class com.hariharan.zerokey.emergency.** { *; }
+-keep class com.hariharan.zerokey.sharing.** { *; }
+-keep class com.hariharan.zerokey.sync.** { *; }
+-keep class com.hariharan.zerokey.core.crypto.EncryptedVault { *; }
+
+# kotlinx.serialization
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.**
+-keepclassmembers class **$$serializer { *; }
+-keep,includedescriptorclasses class com.hariharan.zerokey.**$$serializer { *; }

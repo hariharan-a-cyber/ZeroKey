@@ -4,7 +4,6 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import com.hariharan.zerokey.core.common.PrivacyLogger
-import dagger.hilt.android.scopes.ActivityScoped
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator

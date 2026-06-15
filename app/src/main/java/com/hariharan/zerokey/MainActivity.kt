@@ -147,6 +147,7 @@ class MainActivity : FragmentActivity() {
                     AuthScreen(
                         authenticator = authenticator,
                         masterPasswordManager = masterPasswordManager,
+                        authAttemptManager = authAttemptManager,
                         onAuthSuccess = { 
                             isAuthenticated = true
                             masterPasswordManager.authorizeAutofill()
@@ -312,8 +313,9 @@ fun BiometricLockScreen(authManager: AuthAttemptManager, onAuthenticated: () -> 
                 object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                         super.onAuthenticationSucceeded(result)
-                        isAuthenticating = false
                         authManager.resetAttempts()
+                        isAuthenticating = false
+                        // Use a side-effect or small delay to ensure Compose state updates correctly
                         onAuthenticated()
                     }
                     

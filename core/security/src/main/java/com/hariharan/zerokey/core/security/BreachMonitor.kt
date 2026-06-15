@@ -8,6 +8,8 @@ import io.ktor.client.plugins.logging.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import java.security.MessageDigest
+import java.nio.CharBuffer
+import java.nio.charset.StandardCharsets
 import java.util.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,28 +35,18 @@ class BreachMonitor @Inject constructor() {
     suspend fun checkBreach(password: CharArray): Boolean {
         if (password.isEmpty()) return false
         
-        val passwordBytes = ByteArray(password.size * 3)
+        var passwordBytes: ByteArray? = null
         var fullHash: ByteArray? = null
         val hexChars = CharArray(40)
-        
+
         try {
-            var bytesWritten = 0
-            for (char in password) {
-                val code = char.code
-                if (code < 0x80) {
-                    passwordBytes[bytesWritten++] = code.toByte()
-                } else if (code < 0x800) {
-                    passwordBytes[bytesWritten++] = (0xc0 or (code shr 6)).toByte()
-                    passwordBytes[bytesWritten++] = (0x80 or (code and 0x3f)).toByte()
-                } else {
-                    passwordBytes[bytesWritten++] = (0xe0 or (code shr 12)).toByte()
-                    passwordBytes[bytesWritten++] = (0x80 or ((code shr 6) and 0x3f)).toByte()
-                    passwordBytes[bytesWritten++] = (0x80 or (code and 0x3f)).toByte()
-                }
-            }
+            // Correct UTF-8 encoding (handles emoji / surrogate pairs) without an intermediate String.
+            val encoded = StandardCharsets.UTF_8.encode(CharBuffer.wrap(password))
+            passwordBytes = ByteArray(encoded.remaining())
+            encoded.get(passwordBytes)
 
             val digest = MessageDigest.getInstance("SHA-1")
-            digest.update(passwordBytes, 0, bytesWritten)
+            digest.update(passwordBytes)
             fullHash = digest.digest()
             
             bytesToHex(fullHash, hexChars)

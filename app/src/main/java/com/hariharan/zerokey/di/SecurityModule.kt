@@ -115,6 +115,16 @@ object SecurityModule {
 
     @Provides
     @Singleton
+    fun provideBillingManager(@ApplicationContext context: Context): com.hariharan.zerokey.security.BillingManager = com.hariharan.zerokey.security.BillingManager(context)
+
+    @Provides
+    @Singleton
+    fun provideFeatureAccessManager(billingManager: com.hariharan.zerokey.security.BillingManager): com.hariharan.zerokey.security.FeatureAccessManager {
+        return com.hariharan.zerokey.security.FeatureAccessManager(billingManager.isPremium)
+    }
+
+    @Provides
+    @Singleton
     fun provideVaultSerializer(): VaultSerializer = VaultSerializer()
 
     @Provides

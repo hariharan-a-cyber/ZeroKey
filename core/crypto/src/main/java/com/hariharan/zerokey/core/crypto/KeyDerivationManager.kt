@@ -52,7 +52,7 @@ class KeyDerivationManager @Inject constructor() {
     /**
      * Derives a 256-bit AES key from a Master Password using Argon2id.
      */
-    fun deriveKey(password: CharArray, salt: ByteArray, version: Int = 1): SecretKeySpec {
+    fun deriveKey(password: CharArray, salt: ByteArray, version: Int = LATEST_VERSION): SecretKeySpec {
         val startTime = System.currentTimeMillis()
         val config = configs[version] ?: configs[1]!!
 

@@ -55,7 +55,7 @@ class VaultSerializer {
             vaultData = ciphertextBase64,
             salt = salt,
             iv = Base64.encodeToString(encryptedData.iv, Base64.NO_WRAP),
-            iterations = 600000 // Standard for high security
+            iterations = 4 // Argon2id time cost (matches KeyDerivationManager LATEST_VERSION)
         ).also {
             // Note: Integrity hash (HMAC) is usually stored alongside the blob in Firestore
             // but we can include it in the model if needed for backups.

@@ -1,11 +1,11 @@
 package com.hariharan.zerokey.security
 
+import kotlinx.coroutines.flow.StateFlow
+
 /**
  * Manages access to premium features based on subscription status.
  */
-class FeatureAccessManager(private val plan: UserPlan = UserPlan.FREE) {
-
-    enum class UserPlan { FREE, PREMIUM, PRO }
+class FeatureAccessManager(private val isPremiumFlow: StateFlow<Boolean>) {
 
     enum class Feature {
         CLOUD_SYNC,
@@ -22,10 +22,11 @@ class FeatureAccessManager(private val plan: UserPlan = UserPlan.FREE) {
      * Returns true if the current plan has access to the given feature.
      */
     fun hasAccess(feature: Feature): Boolean {
+        val isPremium = isPremiumFlow.value
         return when (feature) {
             Feature.LOCAL_VAULT, Feature.AUTOFILL, Feature.GENERATOR -> true
-            Feature.CLOUD_SYNC, Feature.BREACH_MONITORING, Feature.SECURITY_ANALYTICS -> plan != UserPlan.FREE
-            Feature.EMERGENCY_ACCESS, Feature.SECURE_SHARING -> plan == UserPlan.PRO
+            Feature.CLOUD_SYNC, Feature.BREACH_MONITORING, Feature.SECURITY_ANALYTICS -> isPremium
+            Feature.EMERGENCY_ACCESS, Feature.SECURE_SHARING -> isPremium
         }
     }
 }

@@ -102,6 +102,9 @@ dependencies {
     // Argon2 for Secure Key Derivation
     implementation(libs.argon2kt)
 
+    // Google Play Billing
+    implementation("com.android.billingclient:billing-ktx:7.1.1")
+
     // Tink for ECC (Curve25519) and Hybrid Encryption
     implementation(libs.tink.android)
     

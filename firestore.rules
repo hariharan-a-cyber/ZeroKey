@@ -1,23 +1,63 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /encrypted_vault_snapshots/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      match /devices/{deviceId} {
+        allow read, write: if isOwner(userId);
+      }
     }
+
+    match /encrypted_vault_snapshots/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    match /connection_test/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    match /public_keys/{userId} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId);
+    }
+
+    match /device_trust/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
     match /shared_credentials/{docId} {
-      allow read: if request.auth != null && (
+      allow read: if signedIn() && (
         resource.data.recipientUserId == request.auth.uid ||
         resource.data.senderUserId == request.auth.uid
       );
-      allow create: if request.auth != null && request.resource.data.senderUserId == request.auth.uid;
-      allow delete: if request.auth != null && resource.data.recipientUserId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.senderUserId == request.auth.uid;
+      allow delete: if signedIn() && resource.data.recipientUserId == request.auth.uid;
     }
-    match /public_keys/{userId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+
+    match /emergency_access_config/{ownerUid} {
+      allow read: if signedIn() && (
+        request.auth.uid == ownerUid ||
+        request.auth.uid == resource.data.trustedContactUid
+      );
+      allow write: if isOwner(ownerUid);
     }
-    match /device_trust/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    match /emergency_access_requests/{requestId} {
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.ownerUid ||
+        request.auth.uid == resource.data.requesterUid
+      );
+      allow create: if signedIn() && request.resource.data.requesterUid == request.auth.uid;
+      // ONLY owners can manually approve or cancel.
+      // Requesters cannot update approveAt or status themselves.
+      allow update: if signedIn() && (
+        request.auth.uid == resource.data.ownerUid &&
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'approveAt']))
+      );
     }
   }
 }

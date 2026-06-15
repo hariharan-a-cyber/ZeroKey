@@ -46,6 +46,9 @@ class MasterPasswordManager @Inject constructor(
     @Volatile
     private var lastUnlockTimestamp: Long = 0
 
+    @Volatile
+    private var cachedPrefs: android.content.SharedPreferences? = null
+
     /**
      * Checks if a master password and vault key have already been set up.
      */
@@ -134,6 +137,24 @@ class MasterPasswordManager @Inject constructor(
     }
 
     /**
+     * Installs a brand-new raw vault key, re-wrapping it under the current master key
+     * and the hardware root key. Used by key rotation. Vault must be unlocked.
+     */
+    fun installNewVaultKey(context: Context, rawVaultKey: ByteArray) {
+        val currentMasterKey = masterKey ?: throw IllegalStateException("Vault is locked")
+
+        // Layer 1: Encrypt new vault key with the current Master Key
+        val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, currentMasterKey)
+        // Layer 2: Wrap with hardware-backed Root Key
+        val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
+
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+
+        // Update in-memory vault key
+        vaultKey = SecretKeySpec(rawVaultKey, "AES")
+    }
+
+    /**
      * Imports a vault key from the cloud by unwrapping it with the master key.
      * Then hardens it with the hardware key and saves it locally.
      */
@@ -184,14 +205,8 @@ class MasterPasswordManager @Inject constructor(
     }
 
     fun lockVault() {
-        masterKey?.let { 
-            val bytes = it.encoded
-            SensitiveDataManager.clearSensitiveData(bytes)
-        }
-        vaultKey?.let { 
-            val bytes = it.encoded
-            SensitiveDataManager.clearSensitiveData(bytes)
-        }
+        // Note: SecretKeySpec.getEncoded() returns a COPY, so it cannot be wiped in place.
+        // Dropping the references and letting GC reclaim them is the real protection.
         masterKey = null
         vaultKey = null
         lastUnlockTimestamp = 0
@@ -256,7 +271,7 @@ class MasterPasswordManager @Inject constructor(
     }
 
     fun getCryptoVersion(context: Context): Int {
-        return getPrefs(context).getInt(KEY_CRYPTO_VERSION, 1)
+        return getPrefs(context).getInt(KEY_CRYPTO_VERSION, KeyDerivationManager.LATEST_VERSION)
     }
 
     private fun saveHardenedVaultKey(context: Context, innerIv: ByteArray, outerEnc: EncryptedData) {
@@ -271,13 +286,16 @@ class MasterPasswordManager @Inject constructor(
     private fun getStoredValue(context: Context, key: String): String? = getPrefs(context).getString(key, null)
 
     private fun getPrefs(context: Context): android.content.SharedPreferences {
+        cachedPrefs?.let { return it }
         val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
-        return EncryptedSharedPreferences.create(
+        val prefs = EncryptedSharedPreferences.create(
             PREFS_NAME,
             masterKeyAlias,
-            context,
+            context.applicationContext,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
+        cachedPrefs = prefs
+        return prefs
     }
 }

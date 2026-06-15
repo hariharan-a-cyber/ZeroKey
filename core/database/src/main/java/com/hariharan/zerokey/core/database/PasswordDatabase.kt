@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 
 @Database(
     entities = [
@@ -27,6 +28,15 @@ abstract class PasswordDatabase : RoomDatabase() {
     abstract fun auditLogDao(): AuditLogDao
 
     companion object {
+        // Add a Migration(from, to) object here for EVERY future schema/version change.
+        // Never delete user data. Example:
+        // private val MIGRATION_6_7 = object : Migration(6, 7) {
+        //     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        //         db.execSQL("ALTER TABLE passwords ADD COLUMN newField TEXT")
+        //     }
+        // }
+        private val MIGRATIONS: Array<Migration> = arrayOf()
+
         @Volatile
         private var INSTANCE: PasswordDatabase? = null
 
@@ -37,7 +47,7 @@ abstract class PasswordDatabase : RoomDatabase() {
                     PasswordDatabase::class.java,
                     "ZeroKey_Database"
                 )
-                .fallbackToDestructiveMigration()
+                .addMigrations(*MIGRATIONS)
                 .build()
                 INSTANCE = instance
                 instance

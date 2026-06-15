@@ -37,26 +37,36 @@ class FirebaseAuthenticator {
     /**
      * Sign up with Email/Password.
      */
-    suspend fun signUp(email: String, password: String): FirebaseUser? {
+    suspend fun signUp(email: String, password: String): AuthResult {
         return try {
             val result = auth.createUserWithEmailAndPassword(email, password).await()
-            result.user
+            val user = result.user ?: return AuthResult.Error("Sign-up failed")
+            AuthResult.Success(user)
+        } catch (e: com.google.firebase.auth.FirebaseAuthUserCollisionException) {
+            AuthResult.Error("An account already exists for this email")
+        } catch (e: com.google.firebase.auth.FirebaseAuthWeakPasswordException) {
+            AuthResult.Error("Password is too weak (use 8+ characters)")
         } catch (e: Exception) {
             PrivacyLogger.e("FirebaseAuthenticator", "SignUp failed: ${e.message}")
-            null
+            AuthResult.Error("Sign-up failed. Check your connection and try again.")
         }
     }
 
     /**
      * Sign in with Email/Password.
      */
-    suspend fun signIn(email: String, password: String): FirebaseUser? {
+    suspend fun signIn(email: String, password: String): AuthResult {
         return try {
             val result = auth.signInWithEmailAndPassword(email, password).await()
-            result.user
+            val user = result.user ?: return AuthResult.Error("Sign-in failed")
+            AuthResult.Success(user)
+        } catch (e: com.google.firebase.auth.FirebaseAuthInvalidCredentialsException) {
+            AuthResult.Error("Incorrect email or password")
+        } catch (e: com.google.firebase.auth.FirebaseAuthInvalidUserException) {
+            AuthResult.Error("No account found for this email")
         } catch (e: Exception) {
             PrivacyLogger.e("FirebaseAuthenticator", "SignIn failed: ${e.message}")
-            null
+            AuthResult.Error("Sign-in failed. Check your connection and try again.")
         }
     }
 
@@ -131,4 +141,9 @@ class FirebaseAuthenticator {
             PrivacyLogger.e("FirebaseAuthenticator", "Clear credential state failed", e)
         }
     }
+}
+
+sealed class AuthResult {
+    data class Success(val user: com.google.firebase.auth.FirebaseUser) : AuthResult()
+    data class Error(val message: String) : AuthResult()
 }

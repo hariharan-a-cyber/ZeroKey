@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 fun AuthScreen(
     authenticator: FirebaseAuthenticator,
     masterPasswordManager: MasterPasswordManager,
+    authAttemptManager: com.hariharan.zerokey.core.security.AuthAttemptManager,
     onAuthSuccess: () -> Unit
 ) {
     var isLogin by remember { mutableStateOf(true) }
@@ -155,32 +156,43 @@ fun AuthScreen(
                         errorMessage = null
                         
                         if (isRestoringSession) {
+                            if (authAttemptManager.isLockedOut()) {
+                                val secs = authAttemptManager.getRemainingLockoutTime() / 1000
+                                errorMessage = "Too many attempts. Try again in ${secs}s."
+                                isLoading = false
+                                return@launch
+                            }
                             try {
                                 masterPasswordManager.unlockVault(context, password.toCharArray())
+                                authAttemptManager.resetAttempts()
                                 onAuthSuccess()
                             } catch (e: Exception) {
+                                authAttemptManager.recordFailedAttempt()
                                 errorMessage = "Unlock failed: Incorrect password"
                             }
                         } else {
-                            val user = if (isLogin) {
+                            val authResult = if (isLogin) {
                                 authenticator.signIn(email, password)
                             } else {
                                 authenticator.signUp(email, password)
                             }
                             
-                            if (user != null) {
-                                try {
-                                    if (!masterPasswordManager.isSetup(context)) {
-                                        masterPasswordManager.setupVault(context, password.toCharArray())
-                                    } else {
-                                        masterPasswordManager.unlockVault(context, password.toCharArray())
+                            when (authResult) {
+                                is com.hariharan.zerokey.security.AuthResult.Success -> {
+                                    try {
+                                        if (!masterPasswordManager.isSetup(context)) {
+                                            masterPasswordManager.setupVault(context, password.toCharArray())
+                                        } else {
+                                            masterPasswordManager.unlockVault(context, password.toCharArray())
+                                        }
+                                        onAuthSuccess()
+                                    } catch (e: Exception) {
+                                        errorMessage = "Vault unlock failed: ${e.message}"
                                     }
-                                    onAuthSuccess()
-                                } catch (e: Exception) {
-                                    errorMessage = "Vault unlock failed: ${e.message}"
                                 }
-                            } else {
-                                errorMessage = if (isLogin) "Invalid credentials" else "Signup failed"
+                                is com.hariharan.zerokey.security.AuthResult.Error -> {
+                                    errorMessage = authResult.message
+                                }
                             }
                         }
                         isLoading = false
