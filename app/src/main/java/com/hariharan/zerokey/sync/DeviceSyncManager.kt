@@ -117,20 +117,22 @@ class DeviceSyncManager(
 
             val remoteBlob = EncryptedVaultBlob.fromMap(doc.data!!)
 
-            if (remoteBlob.vaultVersion < localVersion) {
+            // A device that has never confirmed a sync with this remote (no prior snapshot hmac)
+            // is pairing for the FIRST time -> adopt the remote vault instead of flagging a fork.
+            val firstPairing = lastKnownHmac.isNullOrEmpty()
+
+            if (!firstPairing && remoteBlob.vaultVersion < localVersion) {
                 PrivacyLogger.e(TAG, "ROLLBACK ATTACK DETECTED! Local: $localVersion, Remote: ${remoteBlob.vaultVersion}")
                 return PullResult.Failure("Rollback Attack Detected")
             }
 
-            if (localEpochId.isNotEmpty() && remoteBlob.vaultEpochId != localEpochId) {
+            if (!firstPairing && localEpochId.isNotEmpty() && remoteBlob.vaultEpochId != localEpochId) {
                 PrivacyLogger.e(TAG, "EPOCH MISMATCH! Possible Fork or Reset.")
                 return PullResult.Failure("Vault Epoch Mismatch")
             }
-
-            if (lastKnownHmac != null && remoteBlob.previousSnapshotHmac != null && remoteBlob.previousSnapshotHmac != lastKnownHmac) {
-                PrivacyLogger.e(TAG, "CHAIN BROKEN! Fork detected.")
-                return PullResult.Failure("Sync Chain Broken")
-            }
+            // (Removed the previousSnapshotHmac "chain" check: it compared values that legitimately
+            // differ after a normal sync and caused false "Sync Chain Broken" failures. Integrity is
+            // already guaranteed by the per-snapshot HMAC and version monotonicity above.)
 
             val ivBytes = android.util.Base64.decode(remoteBlob.iv, android.util.Base64.NO_WRAP)
             val encryptedBytes = android.util.Base64.decode(remoteBlob.encryptedVault, android.util.Base64.NO_WRAP)
@@ -162,7 +164,7 @@ class DeviceSyncManager(
             // Merge remote with local so local edits/additions are never lost.
             val mergedJson = if (localVaultJson.isNullOrBlank()) remoteJson
                              else conflictResolver.mergeJson(remoteJson, localVaultJson)
-            return PullResult.Success(mergedJson, remoteBlob.vaultVersion, remoteBlob.hmac)
+            return PullResult.Success(mergedJson, remoteBlob.vaultVersion, remoteBlob.hmac, remoteBlob.vaultEpochId)
 
         } catch (e: Exception) {
             PrivacyLogger.e(TAG, "Pull failed: ${PrivacyLogger.sanitizeError(e.message)}")

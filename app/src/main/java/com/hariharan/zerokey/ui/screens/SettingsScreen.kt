@@ -15,7 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
@@ -71,6 +71,7 @@ fun SettingsScreen(
     var isRotating by remember { mutableStateOf(false) }
     var isChangingPassword by remember { mutableStateOf(false) }
     var showRecoveryWarnDialog by remember { mutableStateOf(false) }
+    var showLockWarnDialog by remember { mutableStateOf(false) }
 
     val timeoutOptions = listOf(
         TimeoutOption("Always Require", 0L),
@@ -233,9 +234,13 @@ fun SettingsScreen(
                         Switch(
                             checked = lockOnExit,
                             onCheckedChange = {
-                                lockOnExit = it
-                                masterPasswordManager.setLockOnExit(context, it)
-                                Toast.makeText(context, if (it) "Lock on exit enabled" else "Lock on exit disabled", Toast.LENGTH_SHORT).show()
+                                if (!it) {
+                                    showLockWarnDialog = true
+                                } else {
+                                    lockOnExit = true
+                                    masterPasswordManager.setLockOnExit(context, true)
+                                    Toast.makeText(context, "Auto-lock enabled", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         )
                     }
@@ -425,7 +430,7 @@ fun SettingsScreen(
                             .padding(20.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.ExitToApp, null, tint = MaterialTheme.colorScheme.error)
+                        Icon(Icons.AutoMirrored.Filled.ExitToApp, null, tint = MaterialTheme.colorScheme.error)
                         Spacer(Modifier.width(16.dp))
                         Column {
                             Text("Sign Out", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
@@ -439,6 +444,31 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showLockWarnDialog) {
+        AlertDialog(
+            onDismissRequest = { showLockWarnDialog = false },
+            icon = { Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Disable Auto-Lock?") },
+            text = {
+                Text("Your vault key will stay in memory even when the app is backgrounded. This is convenient but allows anyone with access to your unlocked phone to see your passwords.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        lockOnExit = false
+                        masterPasswordManager.setLockOnExit(context, false)
+                        showLockWarnDialog = false
+                        Toast.makeText(context, "Security reduced: Auto-lock disabled", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Disable Security") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLockWarnDialog = false }) { Text("Keep Protected") }
+            }
+        )
     }
 
     if (showRecoveryWarnDialog) {

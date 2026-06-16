@@ -68,9 +68,26 @@ class SyncViewModel @Inject constructor(
 
                 when (pullResult) {
                     is PullResult.Success -> {
+                        // Apply the merged remote+local set locally, and adopt the remote epoch.
                         val mergedEntities = Json.decodeFromString(ListSerializer(PasswordEntity.serializer()), pullResult.plaintextVault)
                         repository.syncWithRemote(mergedEntities)
-                        repository.updateVaultVersion(pullResult.version, pullResult.snapshotHmac)
+                        repository.setVaultEpochId(pullResult.epochId)
+
+                        // Push the merged result so this device's edits propagate to the cloud.
+                        val pushBack = syncManager.pushVaultSnapshot(
+                            userId = userId,
+                            plaintextVaultJson = pullResult.plaintextVault,
+                            encryptionKey = encryptionKey,
+                            hmacKey = hmacKey,
+                            wrappedKey = masterPasswordManager.getWrappedVaultKey(),
+                            vaultEpochId = pullResult.epochId.ifEmpty { localEpochId },
+                            previousSnapshotHmac = pullResult.snapshotHmac
+                        )
+                        if (pushBack is SyncResult.Success) {
+                            repository.updateVaultVersion(pushBack.version, pushBack.snapshotHmac)
+                        } else {
+                            repository.updateVaultVersion(pullResult.version, pullResult.snapshotHmac)
+                        }
                         _syncState.value = SyncStatus.Success(System.currentTimeMillis())
                     }
                     is PullResult.Conflict -> {

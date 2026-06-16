@@ -247,6 +247,7 @@ class ZeroKeyAutofillService : AutofillService() {
                             setTextViewText(R.id.autofill_username, label)
                         }
                         
+                        @Suppress("DEPRECATION")
                         val datasetBuilder = Dataset.Builder(presentation)
 
                         // Inline Presentation (Android 11+)
@@ -265,16 +266,19 @@ class ZeroKeyAutofillService : AutofillService() {
                                 spec,
                                 false
                             )
+                            @Suppress("DEPRECATION")
                             datasetBuilder.setInlinePresentation(inlinePresentation)
                         }
 
                         parseResult.usernameId?.let {
+                            @Suppress("DEPRECATION")
                             datasetBuilder.setValue(it, AutofillValue.forText(cred.username))
                         }
                         parseResult.passwordId?.let {
                             val passwordBytes = cred.getPasswordAsBytes()
                             try {
                                 val passwordStr = passwordBytes.decodeToString()
+                                @Suppress("DEPRECATION")
                                 datasetBuilder.setValue(it, AutofillValue.forText(passwordStr))
                             } finally {
                                 passwordBytes.fill(0)

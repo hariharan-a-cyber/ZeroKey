@@ -81,6 +81,13 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
+        
         // Privacy Hardening: Global Crash Sanitizer
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             PrivacyLogger.e("CRASH", "Uncaught Exception in ${thread.name}: ${PrivacyLogger.sanitizeError(throwable.message)}", throwable)
@@ -96,13 +103,24 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             ZeroKeyTheme {
+                val scope = rememberCoroutineScope()
+                val context = LocalContext.current
                 var isAuthenticated by remember { mutableStateOf(authenticator.isAuthenticated) }
                 // Use a key-based state that we can refresh on resume
                 var vaultCheckKey by remember { mutableStateOf(0) }
                 val isVaultUnlocked = remember(vaultCheckKey) { masterPasswordManager.isUnlocked() }
                 
+                val onSignOut = {
+                    scope.launch {
+                        biometricVaultUnlockManager.clear()
+                        authenticator.signOut(context)
+                        isAuthenticated = false
+                        vaultCheckKey++
+                    }
+                    Unit
+                }
+
                 // Security Hardening: Check device integrity
-                val context = LocalContext.current
                 val securityStatus = remember { SecurityHardening.checkDeviceSecurity(context) }
                 val keySecurity = remember { encryptionManager.getKeySecurityLevel() }
                 
@@ -121,21 +139,19 @@ class MainActivity : FragmentActivity() {
                         },
                         text = { 
                             val message = StringBuilder()
-                            if (securityStatus.isRooted) message.append("• Your device is rooted.\n")
-                            if (securityStatus.isDebuggerAttached) message.append("• A debugger is attached.\n")
-                            if (securityStatus.isFridaDetected) message.append("• Active runtime hooks (Frida) detected.\n")
+                            if (securityStatus.isRooted) message.append("• Phone security is OFF.\n")
+                            if (securityStatus.isDebuggerAttached) message.append("• App is being monitored.\n")
+                            if (securityStatus.isFridaDetected) message.append("• Tamper detected.\n")
                             if (securityStatus.accessibilityRisk == SecurityHardening.RiskLevel.HIGH) {
-                                message.append("• High-risk accessibility services detected: ${securityStatus.highRiskServices.joinToString(", ")}. These apps can read your screen.\n")
+                                message.append("• Screen is being watched.\n")
                             }
                             if (keySecurity == EncryptionManager.KeySecurityLevel.SOFTWARE) {
-                                message.append("• No secure hardware detected for key storage.\n")
+                                message.append("• No secure storage chip.\n")
                             }
                             
-                            val footer = if (securityStatus.isFridaDetected)
-                                "\nSEVERE TAMPER DETECTED. Vault access is strictly limited for your safety."
-                            else if (securityStatus.isCompromised)
-                                "\nUsing a password manager in this environment is HIGHLY dangerous." 
-                            else "\nWe recommend reviewing these settings for maximum privacy."
+                            val footer = if (securityStatus.isFridaDetected || securityStatus.isCompromised)
+                                "\nYour passwords are NOT safe here."
+                            else "\nReview these settings for privacy."
 
                             Text(message.toString() + footer) 
                         },
@@ -145,13 +161,14 @@ class MainActivity : FragmentActivity() {
                     )
                 }
 
-                if (!isAuthenticated || !isVaultUnlocked) {
+                if (!isAuthenticated || (!isVaultUnlocked && masterPasswordManager.shouldLockOnExit(context))) {
                     ExitBackHandler()
                     AuthScreen(
                         authenticator = authenticator,
                         masterPasswordManager = masterPasswordManager,
                         authAttemptManager = authAttemptManager,
                         biometricUnlockManager = biometricVaultUnlockManager,
+                        onSignOut = onSignOut,
                         onAuthSuccess = { 
                             isAuthenticated = true
                             masterPasswordManager.authorizeAutofill()
@@ -165,7 +182,7 @@ class MainActivity : FragmentActivity() {
                         }
                     )
                 } else {
-                    VaultContent(authAttemptManager, authenticator, onRefreshVault = { vaultCheckKey++ })
+                    VaultContent(authAttemptManager, authenticator, onSignOut, onRefreshVault = { vaultCheckKey++ })
                 }
             }
         }
@@ -194,13 +211,17 @@ class MainActivity : FragmentActivity() {
     }
 
     @Composable
-    fun VaultContent(authAttemptManager: AuthAttemptManager, authenticator: FirebaseAuthenticator, onRefreshVault: () -> Unit) {
+    fun VaultContent(
+        authAttemptManager: AuthAttemptManager, 
+        authenticator: FirebaseAuthenticator, 
+        onSignOut: () -> Unit,
+        onRefreshVault: () -> Unit
+    ) {
         val viewModel: PasswordViewModel = hiltViewModel()
         val syncViewModel: SyncViewModel = hiltViewModel()
         
         val deviceTrustManager = this.deviceTrustManager
 
-        var isLocked by remember { mutableStateOf(true) }
         val lifecycleOwner = LocalLifecycleOwner.current
         val scope = rememberCoroutineScope()
 
@@ -208,9 +229,8 @@ class MainActivity : FragmentActivity() {
             val observer = LifecycleEventObserver { _, event ->
                 when (event) {
                     Lifecycle.Event.ON_STOP -> {
-                        // Only re-lock the UI and purge keys if the user's policy says so.
+                        // Only purge keys (which forces re-unlock) if the user's policy says so.
                         if (!isChangingConfigurations && masterPasswordManager.shouldLockOnExit(applicationContext)) {
-                            isLocked = true
                             masterPasswordManager.lockVault()
                             viewModel.lockVault()
                         }
@@ -243,25 +263,19 @@ class MainActivity : FragmentActivity() {
             }
         }
 
-        if (isLocked) {
-            BiometricLockScreen(authAttemptManager) {
-                isLocked = false
+        val uid = authenticator.uid ?: "guest"
+        LaunchedEffect(uid) {
+            viewModel.setUserId(uid)
+            if (uid != "guest") {
+                try {
+                    deviceTrustManager.registerCurrentDevice(uid)
+                } catch (_: Exception) {}
+                try {
+                    credentialShareManager.registerMyKeysIfNeeded(applicationContext, uid)
+                } catch (_: Exception) {}
             }
-        } else {
-            val uid = authenticator.uid ?: "guest"
-            LaunchedEffect(uid) {
-                viewModel.setUserId(uid)
-                if (uid != "guest") {
-                    try {
-                        deviceTrustManager.registerCurrentDevice(uid)
-                    } catch (_: Exception) {}
-                    try {
-                        credentialShareManager.registerMyKeysIfNeeded(applicationContext, uid)
-                    } catch (_: Exception) {}
-                }
-            }
-            ZeroKeyApp(viewModel, syncViewModel, uid, masterPasswordManager, biometricVaultUnlockManager, onRefreshVault)
         }
+        ZeroKeyApp(viewModel, syncViewModel, uid, masterPasswordManager, biometricVaultUnlockManager, onSignOut)
     }
 
     override fun onTrimMemory(level: Int) {

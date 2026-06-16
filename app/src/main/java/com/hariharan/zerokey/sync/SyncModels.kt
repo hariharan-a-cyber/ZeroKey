@@ -47,7 +47,7 @@ sealed class SyncResult {
 }
 
 sealed class PullResult {
-    data class Success(val plaintextVault: String, val version: Long, val snapshotHmac: String) : PullResult()
+    data class Success(val plaintextVault: String, val version: Long, val snapshotHmac: String, val epochId: String = "") : PullResult()
     object NoRemoteVault : PullResult()
     data class Conflict(val resolvedVault: String) : PullResult()
     data class IntegrityFailure(val reason: String, val blob: EncryptedVaultBlob? = null) : PullResult()

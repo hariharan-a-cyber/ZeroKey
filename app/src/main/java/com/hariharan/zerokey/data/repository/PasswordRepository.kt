@@ -90,6 +90,16 @@ class PasswordRepository @Inject constructor(
         }
     }
 
+    suspend fun setVaultEpochId(epoch: String) = withContext(Dispatchers.IO) {
+        if (epoch.isEmpty()) return@withContext
+        val current = vaultMetadataDao?.getMetadata()
+        if (current != null) {
+            vaultMetadataDao.updateMetadata(current.copy(vaultEpochId = epoch))
+        } else {
+            vaultMetadataDao?.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = epoch))
+        }
+    }
+
     suspend fun getLastKnownHmac(): String? = withContext(Dispatchers.IO) {
         vaultMetadataDao?.getMetadata()?.lastKnownHmac
     }
