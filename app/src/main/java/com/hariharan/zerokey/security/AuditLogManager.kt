@@ -17,7 +17,8 @@ class AuditLogManager(private val auditLogDao: AuditLogDao) {
         AUTOFILL_USED("Autofill Used"),
         LOGIN_FAILURE("Failed Login Attempt"),
         SYNC_STARTED("Cloud Sync Started"),
-        SYNC_COMPLETED("Cloud Sync Completed")
+        SYNC_COMPLETED("Cloud Sync Completed"),
+        SETTINGS_CHANGED("Settings Changed")
     }
 
     suspend fun log(eventType: EventType, details: String) {

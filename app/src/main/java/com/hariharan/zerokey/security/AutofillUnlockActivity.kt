@@ -331,17 +331,34 @@ private fun triggerBiometric(activity: FragmentActivity, masterPasswordManager: 
         object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 super.onAuthenticationSucceeded(result)
-                masterPasswordManager.authorizeAutofill()
-                onSuccess()
+                // If vault key is already in memory, just refresh the auth timer.
+                // If it was wiped (lock-on-exit), biometric alone can't restore it here
+                // because we don't have BiometricVaultUnlockManager in this Activity.
+                // In that case, fall through to the master-password path.
+                if (masterPasswordManager.isUnlocked()) {
+                    masterPasswordManager.authorizeAutofill()
+                    onSuccess()
+                } else {
+                    // Vault key is null — biometric can't restore it without the hardware-wrapped copy.
+                    // Show the master password field instead of silently filling blank data.
+                    android.widget.Toast.makeText(activity, "Vault locked. Enter your master password.", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
         })
 
-    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+    val builder = BiometricPrompt.PromptInfo.Builder()
         .setTitle("ZeroKey Autofill")
         .setSubtitle("Authenticate to access your vault")
-        .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or 
-                                 androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-        .build()
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+        builder.setAllowedAuthenticators(
+            androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+    } else {
+        builder.setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        builder.setNegativeButtonText("Cancel")
+    }
+    val promptInfo = builder.build()
 
     biometricPrompt.authenticate(promptInfo)
 }

@@ -161,7 +161,7 @@ class MainActivity : FragmentActivity() {
                     )
                 }
 
-                if (!isAuthenticated || (!isVaultUnlocked && masterPasswordManager.shouldLockOnExit(context))) {
+                if (!isAuthenticated || !isVaultUnlocked) {
                     ExitBackHandler()
                     AuthScreen(
                         authenticator = authenticator,
@@ -280,7 +280,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        masterPasswordManager.onTrimMemory(level)
+        masterPasswordManager.onTrimMemory(level, applicationContext)
     }
 }
 

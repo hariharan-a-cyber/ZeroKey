@@ -577,27 +577,21 @@ private fun triggerExportAuth(activity: FragmentActivity, onSuccess: () -> Unit)
             }
         })
 
-    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+    val builder = BiometricPrompt.PromptInfo.Builder()
         .setTitle("Export Authorization")
         .setSubtitle("Confirm your identity to export the vault")
-        .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or 
-                                 androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-        .build()
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+        builder.setAllowedAuthenticators(
+            androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+    } else {
+        builder.setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        builder.setNegativeButtonText("Cancel")
+    }
+    val promptInfo = builder.build()
 
     biometricPrompt.authenticate(promptInfo)
 }
 
-private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("ZeroKey_Password", text)
-    clipboard.setPrimaryClip(clip)
-    Toast.makeText(context, "Copied. Clearing in 30s.", Toast.LENGTH_SHORT).show()
-}
 
-private fun clearClipboard(context: Context) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    if (clipboard.hasPrimaryClip()) {
-        val clip = ClipData.newPlainText("", "")
-        clipboard.setPrimaryClip(clip)
-    }
-}

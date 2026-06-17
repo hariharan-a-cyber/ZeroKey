@@ -383,9 +383,13 @@ class MasterPasswordManager @Inject constructor(
     /**
      * Responds to system memory pressure by purging sensitive keys.
      */
-    fun onTrimMemory(level: Int) {
+    fun onTrimMemory(level: Int, context: Context? = null) {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            lockVault()
+            // Only wipe keys if the user's policy says to lock on exit.
+            // If context is null (legacy call), default to locking for safety.
+            if (context == null || shouldLockOnExit(context)) {
+                lockVault()
+            }
         }
     }
 

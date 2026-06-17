@@ -4,16 +4,26 @@ service cloud.firestore {
 
     function signedIn() { return request.auth != null; }
     function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function smallString(v) { return v is string && v.size() < 200000; }
 
     match /users/{userId} {
       allow read, write: if isOwner(userId);
+
       match /devices/{deviceId} {
-        allow read, write: if isOwner(userId);
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+                      && request.resource.data.trusted == true
+                      && request.resource.data.revoked == false;
+        allow update: if isOwner(userId)
+                      && !(resource.data.revoked == true && request.resource.data.trusted == true);
       }
     }
 
     match /encrypted_vault_snapshots/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId)
+                   && smallString(request.resource.data.encryptedVault)
+                   && smallString(request.resource.data.hmac);
     }
 
     match /connection_test/{userId} {
@@ -22,7 +32,7 @@ service cloud.firestore {
 
     match /public_keys/{userId} {
       allow read: if signedIn();
-      allow write: if isOwner(userId);
+      allow write: if isOwner(userId) && smallString(request.resource.data.publicKey);
     }
 
     match /device_trust/{userId} {
@@ -34,7 +44,9 @@ service cloud.firestore {
         resource.data.recipientUserId == request.auth.uid ||
         resource.data.senderUserId == request.auth.uid
       );
-      allow create: if signedIn() && request.resource.data.senderUserId == request.auth.uid;
+      allow create: if signedIn()
+                    && request.resource.data.senderUserId == request.auth.uid
+                    && smallString(request.resource.data.encryptedPayload);
       allow delete: if signedIn() && resource.data.recipientUserId == request.auth.uid;
     }
 
@@ -52,8 +64,6 @@ service cloud.firestore {
         request.auth.uid == resource.data.requesterUid
       );
       allow create: if signedIn() && request.resource.data.requesterUid == request.auth.uid;
-      // ONLY owners can manually approve or cancel.
-      // Requesters cannot update approveAt or status themselves.
       allow update: if signedIn() && (
         request.auth.uid == resource.data.ownerUid &&
         (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'approveAt']))

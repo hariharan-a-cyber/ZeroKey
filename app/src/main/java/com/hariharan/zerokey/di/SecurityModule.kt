@@ -153,9 +153,16 @@ object SecurityModule {
         firestore,
         CryptoEngine(),
         object : EmergencyNotificationService {
-            override suspend fun notifyOwnerOfRequest(ownerId: String, contactEmail: String, cancelDeadline: Long) {}
-            override suspend fun notifyRequestCancelled(contactEmail: String) {}
-            override suspend fun notifyAccessGranted(ownerId: String, contactEmail: String) {}
+            override suspend fun notifyOwnerOfRequest(ownerId: String, contactEmail: String, cancelDeadline: Long) {
+                // TODO: Implement push notification via FCM or email when you add server-side.
+                com.hariharan.zerokey.core.common.PrivacyLogger.i("EmergencyAccess", "Access request filed. Owner should be notified.")
+            }
+            override suspend fun notifyRequestCancelled(contactEmail: String) {
+                com.hariharan.zerokey.core.common.PrivacyLogger.i("EmergencyAccess", "Access request cancelled.")
+            }
+            override suspend fun notifyAccessGranted(ownerId: String, contactEmail: String) {
+                com.hariharan.zerokey.core.common.PrivacyLogger.i("EmergencyAccess", "Emergency access granted.")
+            }
         }
     )
 }

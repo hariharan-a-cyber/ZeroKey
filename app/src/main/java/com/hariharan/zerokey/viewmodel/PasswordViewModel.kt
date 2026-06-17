@@ -247,7 +247,7 @@ class PasswordViewModel @Inject constructor(
                 repository.savePassword(service, username, password, notes, id = existing?.id ?: 0)
                 
                 val logMsg = if (isUpdate) "Updated password for $service" else "Added new password for $service"
-                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, logMsg)
+                auditLogManager.log(AuditLogManager.EventType.SETTINGS_CHANGED, logMsg)
 
                 allPasswords = repository.getPasswords()
                 filterPasswords()
@@ -279,7 +279,7 @@ class PasswordViewModel @Inject constructor(
     fun deletePassword(item: PasswordItem) {
         viewModelScope.launch {
             repository.deletePassword(item.id)
-            auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Deleted password for ${item.serviceName}")
+            auditLogManager.log(AuditLogManager.EventType.SETTINGS_CHANGED, "Deleted password for ${item.serviceName}")
             loadPasswords()
             loadAuditLogs()
         }
@@ -335,7 +335,7 @@ class PasswordViewModel @Inject constructor(
             if (vaultKey != null && backupManager != null) {
                 try {
                     backupManager.importBackup(file, vaultKey, vaultKey)
-                    auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Vault imported from ${file.name}")
+                    auditLogManager.log(AuditLogManager.EventType.SETTINGS_CHANGED, "Vault imported from ${file.name}")
                     loadPasswords()
                     loadAuditLogs()
                     onComplete(true)
@@ -355,7 +355,30 @@ class PasswordViewModel @Inject constructor(
                 val item = allPasswords.find { it.id == credentialId }
                     ?: return@launch onResult(false, "Credential not found")
                 val manager = shareManager ?: return@launch onResult(false, "Sharing is unavailable")
-                val payload = Json.encodeToString(PasswordItem.serializer(), item)
+                // PasswordItem's @Serializable uses constructor params (initialServiceName=""),
+                // not the lazy-decrypt getters. Build a plain JSON with the actual decrypted values.
+                val payloadMap = mapOf(
+                    "id" to item.id,
+                    "serviceName" to item.serviceName,
+                    "username" to item.username,
+                    "password" to item.password,
+                    "notes" to (item.notes ?: ""),
+                    "isFavorite" to item.isFavorite,
+                    "createdAt" to item.createdAt
+                )
+                val payload = Json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(),
+                    kotlinx.serialization.json.buildJsonObject {
+                        payloadMap.forEach { (k, v) ->
+                            when (v) {
+                                is Int -> put(k, kotlinx.serialization.json.JsonPrimitive(v))
+                                is Long -> put(k, kotlinx.serialization.json.JsonPrimitive(v))
+                                is Boolean -> put(k, kotlinx.serialization.json.JsonPrimitive(v))
+                                is String -> put(k, kotlinx.serialization.json.JsonPrimitive(v))
+                                else -> put(k, kotlinx.serialization.json.JsonPrimitive(v.toString()))
+                            }
+                        }
+                    }
+                )
                 manager.shareCredential(senderId, recipientId, payload)
                 auditLogManager.log(AuditLogManager.EventType.CREDENTIAL_SHARED, "Shared ${item.serviceName}")
                 onResult(true, "Shared securely")
@@ -368,16 +391,11 @@ class PasswordViewModel @Inject constructor(
     fun changeMasterPassword(context: Context, newPassword: String, onComplete: (AuthResult) -> Unit) {
         viewModelScope.launch {
             try {
-                // 1. Update Firebase Password first (requires recent login)
-                val authResult = authenticator.updatePassword(newPassword)
-                
-                if (authResult is AuthResult.Success) {
-                    // 2. Update local vault key
-                    masterPasswordManager.changeMasterPassword(context, newPassword.toCharArray())
-                    auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Master Password changed (Keys rotated)")
-                }
-                
-                onComplete(authResult)
+                // Zero-knowledge: master password is LOCAL only. Never sent to Firebase.
+                // Firebase Auth password stays unchanged (it's the account password, not the vault key).
+                masterPasswordManager.changeMasterPassword(context, newPassword.toCharArray())
+                auditLogManager.log(AuditLogManager.EventType.SETTINGS_CHANGED, "Master password changed")
+                onComplete(AuthResult.Success(authenticator.currentUser!!))
             } catch (e: Exception) {
                 PrivacyLogger.e("PasswordViewModel", "Password change failed", e)
                 onComplete(AuthResult.Error(e.message ?: "Unknown error"))
@@ -389,7 +407,7 @@ class PasswordViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 repository.rotateVaultKey(context)
-                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Vault Key rotated (Full re-encryption)")
+                auditLogManager.log(AuditLogManager.EventType.SETTINGS_CHANGED, "Vault Key rotated (Full re-encryption)")
                 loadPasswords()
                 onComplete(true)
             } catch (e: Exception) {
@@ -440,7 +458,7 @@ class PasswordViewModel @Inject constructor(
             try {
                 manager.revokeDeviceTrust(userId, deviceId)
                 refreshDeviceList()
-                auditLogManager.log(AuditLogManager.EventType.VAULT_UNLOCKED, "Revoked trust for device: $deviceId")
+                auditLogManager.log(AuditLogManager.EventType.SETTINGS_CHANGED, "Revoked trust for ${com.hariharan.zerokey.core.common.PrivacyLogger.mask(deviceId)}")
                 onComplete(true)
             } catch (e: Exception) {
                 PrivacyLogger.e("PasswordViewModel", "Failed to revoke device", e)

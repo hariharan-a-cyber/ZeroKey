@@ -29,9 +29,25 @@ object PasswordUtils {
         if (includeSymbols) charPool.append(SYMBOLS)
 
         val secureRandom = SecureRandom()
-        return (1..maxOf(20, length))
+        val effectiveLength = length.coerceAtLeast(8)
+
+        // Guarantee at least one character from each selected category.
+        val required = mutableListOf<Char>()
+        required.add(LOWERCASE[secureRandom.nextInt(LOWERCASE.length)])
+        if (includeUppercase) required.add(UPPERCASE[secureRandom.nextInt(UPPERCASE.length)])
+        if (includeNumbers) required.add(NUMBERS[secureRandom.nextInt(NUMBERS.length)])
+        if (includeSymbols) required.add(SYMBOLS[secureRandom.nextInt(SYMBOLS.length)])
+
+        val remaining = (1..(effectiveLength - required.size))
             .map { charPool[secureRandom.nextInt(charPool.length)] }
-            .joinToString("")
+        val combined = (required + remaining).toMutableList()
+
+        // Shuffle so the guaranteed chars aren't always at the start.
+        for (i in combined.indices.reversed()) {
+            val j = secureRandom.nextInt(i + 1)
+            val tmp = combined[i]; combined[i] = combined[j]; combined[j] = tmp
+        }
+        return combined.joinToString("")
     }
 
     /**

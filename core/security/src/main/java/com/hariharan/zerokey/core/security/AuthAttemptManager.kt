@@ -32,9 +32,9 @@ class AuthAttemptManager @Inject constructor(@ApplicationContext private val con
         val attempts = getFailedAttempts() + 1
         prefs.edit().putInt(KEY_ATTEMPTS, attempts).apply()
         
-        // Security Logging: Track user, device, and time.
+        // Security Logging: Track masked user and device.
         val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-        com.hariharan.zerokey.core.common.PrivacyLogger.e("SecurityAuth", "BRUTE_FORCE_ALERT: Failed attempt for $userId on device $deviceId. Attempt #$attempts")
+        com.hariharan.zerokey.core.common.PrivacyLogger.e("SecurityAuth", "BRUTE_FORCE_ALERT: attempt #$attempts for ${com.hariharan.zerokey.core.common.PrivacyLogger.mask(userId)} on ${com.hariharan.zerokey.core.common.PrivacyLogger.mask(deviceId)}")
 
         val lockoutDuration = calculateLockoutDuration(attempts)
         if (lockoutDuration > 0) {
@@ -44,24 +44,19 @@ class AuthAttemptManager @Inject constructor(@ApplicationContext private val con
 
     private fun calculateLockoutDuration(attempts: Int): Long {
         return when (attempts) {
-            1, 2, 3, 4, 5 -> 0L // No timeout for first 5 attempts
-            6 -> 30_000L      // 30s (Changed from 30m)
-            8 -> 120_000L     // 2m
-            9 -> 300_000L     // 5m
-            10 -> 900_000L    // 15m
+            in 1..5 -> 0L       // No timeout for first 5 attempts
+            6 -> 30_000L        // 30s
+            7 -> 60_000L        // 1m
+            8 -> 120_000L       // 2m
+            9 -> 300_000L       // 5m
+            10 -> 900_000L      // 15m
             else -> if (attempts > 10) 900_000L else 0L
         }
     }
 
-    fun needsCaptcha(): Boolean {
-        // Since first 5 are free, captcha now follows at 7-9 as before, or adjusted if needed.
-        // Keeping it at 7-9 as per original plan unless user specifies otherwise.
-        return getFailedAttempts() in 7..9
-    }
 
-    fun isHardLocked(): Boolean {
-        return getFailedAttempts() >= 10
-    }
+
+
 
     fun resetAttempts() {
         prefs.edit().putInt(KEY_ATTEMPTS, 0).remove(KEY_LOCKOUT_TIME).apply()

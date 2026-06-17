@@ -42,7 +42,7 @@ class DeviceSyncManager(
                 return SyncResult.Failure("DEVICE_REVOKED: This device no longer has access to the vault.")
             }
 
-            firestore.enableNetwork().await()
+
 
             try {
                 firestore.collection("connection_test").document(userId).set(mapOf("last_attempt" to System.currentTimeMillis())).await()
@@ -106,7 +106,7 @@ class DeviceSyncManager(
                 return PullResult.Failure("DEVICE_REVOKED: Access denied.")
             }
 
-            firestore.enableNetwork().await()
+
 
             val doc = firestore.collection(COLLECTION_VAULTS)
                 .document(userId)

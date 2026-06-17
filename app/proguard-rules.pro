@@ -60,19 +60,6 @@
 
 # --- ZeroKey keep rules ---
 
-# Firestore model classes are mapped by field name
--keepclassmembers class com.hariharan.zerokey.** { <fields>; }
--keep class com.hariharan.zerokey.sync.** { *; }
--keep class com.hariharan.zerokey.sharing.** { *; }
--keep class com.hariharan.zerokey.emergency.** { *; }
--keep class com.hariharan.zerokey.core.crypto.EncryptedVault { *; }
-
-# kotlinx.serialization
--keepattributes *Annotation*, InnerClasses
--dontnote kotlinx.serialization.**
--keepclassmembers class **$$serializer { *; }
--keep,includedescriptorclasses class com.hariharan.zerokey.**$$serializer { *; }
-
 # Google Tink
 -keep class com.google.crypto.tink.** { *; }
 -dontwarn com.google.crypto.tink.**

@@ -71,12 +71,16 @@ class VaultBackupManager(
         // 2. Decrypt and Deserialize
         val entities = serializer.deserialize(backup.vault, masterKey)
 
-        // 3. Merge with local database (Latest Modified Wins)
+        // 3. Merge with local database (Latest Modified Wins, matched by recordUid)
         val localEntities = repository.getAllEntities()
         entities.forEach { imported ->
-            val local = localEntities.find { it.id == imported.id }
-            if (local == null || imported.lastModified > local.lastModified) {
-                repository.syncEntity(imported)
+            val local = localEntities.find { it.recordUid == imported.recordUid }
+            if (local == null) {
+                // New entry: insert with id=0 so Room auto-generates a non-conflicting ID.
+                repository.syncEntity(imported.copy(id = 0))
+            } else if (imported.lastModified > local.lastModified) {
+                // Existing entry: update using the LOCAL id to avoid overwriting the wrong row.
+                repository.syncEntity(imported.copy(id = local.id))
             }
         }
     }

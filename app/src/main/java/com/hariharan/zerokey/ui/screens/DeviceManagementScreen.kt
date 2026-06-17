@@ -260,12 +260,19 @@ private fun triggerRevocationAuth(activity: FragmentActivity, onSuccess: () -> U
             }
         })
 
-    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+    val builder = BiometricPrompt.PromptInfo.Builder()
         .setTitle("Revoke Device Access")
         .setSubtitle("Confirm your identity to revoke trust from this device")
-        .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or 
-                                 androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-        .build()
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+        builder.setAllowedAuthenticators(
+            androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+    } else {
+        builder.setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        builder.setNegativeButtonText("Cancel")
+    }
+    val promptInfo = builder.build()
 
     biometricPrompt.authenticate(promptInfo)
 }

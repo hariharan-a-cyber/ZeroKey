@@ -54,7 +54,17 @@ fun AddPasswordScreen(
     }
 
     val strength = remember(password) { PasswordUtils.calculateStrength(password) }
-    val isDuplicate = remember(password) { viewModel.isDuplicatePassword(password) }
+    
+    // Debounce: only check duplicates after user stops typing for 500ms.
+    var isDuplicate by remember { mutableStateOf(false) }
+    LaunchedEffect(password) {
+        if (password.length >= 6) {
+            kotlinx.coroutines.delay(500)
+            isDuplicate = viewModel.isDuplicatePassword(password)
+        } else {
+            isDuplicate = false
+        }
+    }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
 

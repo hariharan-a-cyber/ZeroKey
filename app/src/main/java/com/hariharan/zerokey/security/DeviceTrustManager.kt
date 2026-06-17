@@ -43,7 +43,8 @@ class DeviceTrustManager(
             "deviceId" to deviceId,
             "deviceName" to getDeviceName(),
             "lastSeen" to System.currentTimeMillis(),
-            "trusted" to true
+            "trusted" to true,
+            "revoked" to false
         )
         
         firestore.collection("users")
@@ -97,7 +98,7 @@ class DeviceTrustManager(
             .document(userId)
             .collection(COLLECTION_DEVICES)
             .document(deviceId)
-            .update("trusted", false)
+            .update(mapOf("trusted" to false, "revoked" to true))
             .await()
     }
 

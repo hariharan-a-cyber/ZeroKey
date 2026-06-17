@@ -119,64 +119,7 @@ fun SettingsScreen(
                 Text(
                     "Security Policy",
                     style = MaterialTheme.typography.labelLarge,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
                 )
 
@@ -420,6 +363,7 @@ fun SettingsScreen(
                         scope.launch {
                             viewModel.lockVault()
                             masterPasswordManager.lockVault()
+                            biometricUnlockManager.clear()
                             onSignOut()
                         }
                     }
@@ -563,56 +507,13 @@ fun SettingsScreen(
                 }
             },
             confirmButton = {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    TextButton(
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 4.dp),
-                        onClick = {
-                            try {
-                                val userEmail = FirebaseAuth.getInstance().currentUser?.email ?: "Unknown Account"
-                                val fileName = "zerokey-vault-recovery-key.txt"
-                                val content = "Recovery Keys for ZeroKey Account: $userEmail\n" +
-                                        "Each 32-character code can be used once to recover your vault.\n\n" +
-                                        recoveryCodeShown?.split("-")?.joinToString("\n")
-                                
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    val resolver = context.contentResolver
-                                    val contentValues = ContentValues().apply {
-                                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                                        put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
-                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                                    }
-                                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                                    uri?.let {
-                                        resolver.openOutputStream(it)?.use { stream ->
-                                            stream.write(content.toByteArray())
-                                        }
-                                        Toast.makeText(context, "Saved to Downloads folder", Toast.LENGTH_LONG).show()
-                                    }
-                                } else {
-                                    val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), fileName)
-                                    FileOutputStream(file).use { it.write(content.toByteArray()) }
-                                    Toast.makeText(context, "Saved to ${file.absolutePath}", Toast.LENGTH_LONG).show()
-                                }
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    ) { Text("Download", style = MaterialTheme.typography.labelMedium) }
-                    
                     Button(
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 4.dp),
                         onClick = {
                             SecureClipboard.copy(context, "ZeroKey", recoveryCodeShown ?: "")
                             Toast.makeText(context, "Copied. Store it safely.", Toast.LENGTH_SHORT).show()
                             recoveryCodeShown = null
                         }
                     ) { Text("Copy & Close", style = MaterialTheme.typography.labelMedium) }
-                }
             }
         )
     }
@@ -638,6 +539,7 @@ fun SettingsScreen(
                                     biometricUnlockManager.clear()
                                     FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
                                         FirebaseFirestore.getInstance().collection("users").document(uid).update(
+                                            "recoveryBlobs", com.google.firebase.firestore.FieldValue.delete(),
                                             "recoveryWrappedVaultKey", com.google.firebase.firestore.FieldValue.delete(),
                                             "recoveryIv", com.google.firebase.firestore.FieldValue.delete()
                                         )
@@ -678,6 +580,8 @@ fun SettingsScreen(
     }
 
     if (showPasswordChange) {
+        var currentPass by remember { mutableStateOf("") }
+        var currentPassVisible by remember { mutableStateOf(false) }
         var newPass by remember { mutableStateOf("") }
         var confirmPass by remember { mutableStateOf("") }
         var newPassVisible by remember { mutableStateOf(false) }
@@ -690,6 +594,21 @@ fun SettingsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("This will re-wrap your vault with a new key and upgrade security parameters.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = currentPass,
+                        onValueChange = { currentPass = it },
+                        label = { Text("Current Master Password") },
+                        visualTransformation = if (currentPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { currentPassVisible = !currentPassVisible }) {
+                                Icon(
+                                    imageVector = if (currentPassVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     OutlinedTextField(
                         value = newPass,
                         onValueChange = { newPass = it },
@@ -728,18 +647,37 @@ fun SettingsScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (newPass.length < 6) {
+                        if (currentPass.isEmpty()) {
+                            error = "Enter your current password"
+                        } else if (newPass.length < 6) {
                             error = "Password must be at least 6 characters"
                         } else if (newPass != confirmPass) {
                             error = "Passwords do not match"
                         } else {
+                            // Verify current password first.
+                            try {
+                                masterPasswordManager.unlockVault(context, currentPass.toCharArray())
+                            } catch (e: Exception) {
+                                error = "Current password is incorrect"
+                                isChangingPassword = false
+                                return@Button
+                            }
                             isChangingPassword = true
                             viewModel.changeMasterPassword(context, newPass) { result ->
                                 isChangingPassword = false
                                 when (result) {
                                     is com.hariharan.zerokey.security.AuthResult.Success -> {
+                                        // Old recovery + biometric copies wrapped the OLD vault key; invalidate them.
+                                        masterPasswordManager.clearRecoveryBlobLocal(context)
+                                        biometricUnlockManager.clear()
+                                        bioEnabled = false
+                                        FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
+                                            FirebaseFirestore.getInstance().collection("users").document(uid).update(
+                                                "recoveryBlobs", com.google.firebase.firestore.FieldValue.delete()
+                                            )
+                                        }
                                         showPasswordChange = false
-                                        Toast.makeText(context, "Master Password Updated", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Master Password Updated. Re-create your recovery key.", Toast.LENGTH_LONG).show()
                                     }
                                     is com.hariharan.zerokey.security.AuthResult.Error -> {
                                         error = result.message
