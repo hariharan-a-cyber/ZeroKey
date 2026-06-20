@@ -64,7 +64,8 @@ fun AuthScreen(
 
     LaunchedEffect(Unit) {
         while(true) {
-            val remaining = authAttemptManager.getRemainingLockoutTime() / 1000
+            val uid = authenticator.currentUser?.uid ?: "unknown"
+            val remaining = authAttemptManager.getRemainingLockoutTime(uid) / 1000
             if (remaining > 0) {
                 lockoutSeconds = remaining
                 errorMessage = "Too many attempts. Try again in ${String.format("%02d:%02d", remaining / 60, remaining % 60)}."
@@ -78,8 +79,14 @@ fun AuthScreen(
 
     LaunchedEffect(authenticator.isAuthenticated) {
         if (authenticator.isAuthenticated && !masterPasswordManager.isUnlocked()) {
-            isRestoringSession = true
-            if (canBiometric && masterPasswordManager.isSetup(context)) useBiometric = true
+            val uid = authenticator.currentUser?.uid ?: return@LaunchedEffect
+            masterPasswordManager.setUserId(uid)
+            if (masterPasswordManager.isSetup(context, uid)) {
+                isRestoringSession = true
+                if (canBiometric) useBiometric = true
+            } else {
+                isRestoringSession = false
+            }
         }
     }
 
@@ -92,7 +99,8 @@ fun AuthScreen(
                     if (rawKey != null) {
                         masterPasswordManager.restoreVaultKey(rawKey)
                         java.util.Arrays.fill(rawKey, 0)
-                        authAttemptManager.resetAttempts()
+                        val uid = authenticator.currentUser?.uid ?: "unknown"
+                        authAttemptManager.resetAttempts(uid)
                         onAuthSuccess()
                     }
                 }
@@ -162,7 +170,8 @@ fun AuthScreen(
                                 if (rawKey != null) {
                                     masterPasswordManager.restoreVaultKey(rawKey)
                                     java.util.Arrays.fill(rawKey, 0)
-                                    authAttemptManager.resetAttempts()
+                                    val uid = authenticator.currentUser?.uid ?: "unknown"
+                                    authAttemptManager.resetAttempts(uid)
                                     onAuthSuccess()
                                 } else {
                                     errorMessage = "Biometric unlock failed."
@@ -202,8 +211,9 @@ fun AuthScreen(
                         isLoading = true
                         errorMessage = null
                         
-                        if (authAttemptManager.isLockedOut()) {
-                            val rem = authAttemptManager.getRemainingLockoutTime() / 1000
+                        val uidForLockout = if (isRestoringSession) authenticator.currentUser?.uid ?: "unknown" else email
+                        if (authAttemptManager.isLockedOut(uidForLockout)) {
+                            val rem = authAttemptManager.getRemainingLockoutTime(uidForLockout) / 1000
                             errorMessage = "Too many attempts. Try again in ${rem}s."
                             isLoading = false
                             return@launch
@@ -211,15 +221,17 @@ fun AuthScreen(
 
                         if (isRestoringSession) {
                             try {
-                                if (!masterPasswordManager.isSetup(context)) {
-                                    masterPasswordManager.setupVault(context, password.toCharArray())
+                                val currentUid = authenticator.currentUser?.uid ?: throw IllegalStateException("User not logged in")
+                                if (!masterPasswordManager.isSetup(context, currentUid)) {
+                                    masterPasswordManager.setupVault(context, password.toCharArray(), currentUid)
                                 } else {
-                                    masterPasswordManager.unlockVault(context, password.toCharArray())
+                                    masterPasswordManager.unlockVault(context, password.toCharArray(), currentUid)
                                 }
-                                authAttemptManager.resetAttempts()
+                                authAttemptManager.resetAttempts(currentUid)
                                 onAuthSuccess()
                             } catch (e: Exception) {
-                                authAttemptManager.recordFailedAttempt(authenticator.currentUser?.email ?: "unknown")
+                                val currentUid = authenticator.currentUser?.uid ?: "unknown"
+                                authAttemptManager.recordFailedAttempt(currentUid)
                                 errorMessage = "Vault unlock failed: Incorrect password"
                             }
                         } else {
@@ -227,12 +239,14 @@ fun AuthScreen(
                             when (authResult) {
                                 is com.hariharan.zerokey.security.AuthResult.Success -> {
                                     try {
-                                        if (!masterPasswordManager.isSetup(context)) {
-                                            masterPasswordManager.setupVault(context, password.toCharArray())
+                                        val newUid = authResult.user.uid
+                                        masterPasswordManager.setUserId(newUid)
+                                        if (!masterPasswordManager.isSetup(context, newUid)) {
+                                            masterPasswordManager.setupVault(context, password.toCharArray(), newUid)
                                         } else {
-                                            masterPasswordManager.unlockVault(context, password.toCharArray())
+                                            masterPasswordManager.unlockVault(context, password.toCharArray(), newUid)
                                         }
-                                        authAttemptManager.resetAttempts()
+                                        authAttemptManager.resetAttempts(newUid)
                                         onAuthSuccess()
                                     } catch (e: Exception) {
                                         authAttemptManager.recordFailedAttempt(email)
@@ -268,7 +282,10 @@ fun AuthScreen(
                             errorMessage = null
                             try {
                                 val user = authenticator.signInWithGoogle(context, webClientId)
-                                if (user != null) isRestoringSession = true
+                                if (user != null) {
+                                    masterPasswordManager.setUserId(user.uid)
+                                    isRestoringSession = true
+                                }
                                 else errorMessage = "Google sign-in was canceled."
                             } catch (e: Exception) { errorMessage = e.message ?: "Google sign-in failed." }
                             isLoading = false
@@ -309,14 +326,20 @@ fun AuthScreen(
                                                     val map = item as? Map<*, *>
                                                     val b = map?.get("blob") as? String
                                                     val i = map?.get("iv") as? String
-                                                    if (b != null && i != null) blobs.add(MasterPasswordManager.RecoveryBlob(b, i))
+                                                    val f = map?.get("vaultKeyFingerprint") as? String
+                                                    if (b != null && i != null) blobs.add(MasterPasswordManager.RecoveryBlob(b, i, f ?: ""))
                                                 }
                                             } catch (_: Exception) {}
                                         }
                                         if (blobs.isEmpty()) blobs.addAll(masterPasswordManager.getLocalRecoveryBlobs(context))
                                         if (blobs.isEmpty()) recError = "No recovery keys found."
-                                        else { masterPasswordManager.recoverWithRecoveryCode(context, recCode, blobs, recNewPass.toCharArray()); showRecovery = false; onAuthSuccess() }
-                                    } catch (e: Exception) { recError = "Invalid code." }
+                                        else { 
+                                            uid?.let { masterPasswordManager.setUserId(it) }
+                                            masterPasswordManager.recoverWithRecoveryCode(context, blobs, recCode, recNewPass.toCharArray())
+                                            showRecovery = false
+                                            onAuthSuccess() 
+                                        }
+                                    } catch (e: Exception) { recError = e.message ?: "Invalid code." }
                                     recLoading = false
                                 }
                             }) { Text("Reset Password") }

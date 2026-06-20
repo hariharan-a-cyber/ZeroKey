@@ -453,6 +453,7 @@ class PasswordViewModel @Inject constructor(
 
     fun setUserId(uid: String) {
         userId = uid
+        masterPasswordManager.setUserId(uid) // Bind manager to current user
         refreshDeviceList()
     }
 

@@ -26,7 +26,7 @@ class MasterPasswordManager @Inject constructor(
 ) {
 
     companion object {
-        private const val PREFS_NAME = "master_password_prefs"
+        private const val PREFS_NAME_PREFIX = "master_password_prefs_"
         private const val KEY_SALT = "vault_salt"
         private const val KEY_ENCRYPTED_VAULT_KEY = "encrypted_vault_key_blob"
         private const val KEY_VAULT_KEY_IV_INNER = "vault_key_iv_inner"
@@ -50,12 +50,24 @@ class MasterPasswordManager @Inject constructor(
 
     @Volatile
     private var cachedPrefs: android.content.SharedPreferences? = null
+    
+    @Volatile
+    private var currentUserId: String? = null
 
     /**
-     * Checks if a master password and vault key have already been set up.
+     * Checks if a master password and vault key have already been set up for this user.
+     */
+    fun isSetup(context: Context, userId: String): Boolean {
+        val prefs = getPrefs(context, userId)
+        return prefs.getString(KEY_SALT, null) != null && prefs.getString(KEY_ENCRYPTED_VAULT_KEY, null) != null
+    }
+
+    /**
+     * Backward compatibility check for isSetup without userId (legacy)
      */
     fun isSetup(context: Context): Boolean {
-        return getSalt(context) != null && getStoredValue(context, KEY_ENCRYPTED_VAULT_KEY) != null
+        val uid = currentUserId ?: return false
+        return isSetup(context, uid)
     }
 
     /**
@@ -64,12 +76,13 @@ class MasterPasswordManager @Inject constructor(
      * Layer 1: Encrypt Vault Key with Master Key (password-derived).
      * Layer 2: Encrypt result with Android Keystore Root Key (hardware-backed).
      */
-    fun setupVault(context: Context, password: CharArray) {
+    fun setupVault(context: Context, password: CharArray, userId: String) {
+        currentUserId = userId
         encryptionManager.init()
         val salt = keyDerivationManager.generateSalt()
         val version = KeyDerivationManager.LATEST_VERSION
-        saveSalt(context, salt)
-        saveCryptoVersion(context, version)
+        saveSalt(context, salt, userId)
+        saveCryptoVersion(context, version, userId)
         
         val derivedMasterKey = keyDerivationManager.deriveKey(password, salt, version)
         
@@ -79,12 +92,13 @@ class MasterPasswordManager @Inject constructor(
         val newVaultKey = SecretKeySpec(rawVaultKey, "AES")
         
         // Layer 1: Encrypt with Master Key
+        // CRITICAL: Explicit IV for software-backed key separation
         val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, derivedMasterKey)
         
         // Layer 2: Wrap with hardware-backed Root Key
         val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
         
-        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted, userId)
         
         // Store in memory for immediate use
         masterKey = derivedMasterKey
@@ -98,15 +112,17 @@ class MasterPasswordManager @Inject constructor(
     /**
      * Unlocks the vault by unwrapping the vault key using both hardware key and master password.
      */
-    fun unlockVault(context: Context, password: CharArray) {
+    fun unlockVault(context: Context, password: CharArray, userId: String) {
+        currentUserId = userId
         encryptionManager.init()
-        val salt = getSalt(context) ?: throw IllegalStateException("Vault not set up")
-        val version = getCryptoVersion(context)
+        val salt = getSalt(context, userId) ?: throw IllegalStateException("Vault not set up")
+        val version = getCryptoVersion(context, userId)
         val derivedMasterKey = keyDerivationManager.deriveKey(password, salt, version)
         
-        val outerCiphertext = getStoredValue(context, KEY_ENCRYPTED_VAULT_KEY) ?: throw IllegalStateException("Vault key missing")
-        val outerIv = getStoredValue(context, KEY_VAULT_KEY_IV_OUTER) ?: throw IllegalStateException("Outer IV missing")
-        val innerIv = getStoredValue(context, KEY_VAULT_KEY_IV_INNER) ?: throw IllegalStateException("Inner IV missing")
+        val prefs = getPrefs(context, userId)
+        val outerCiphertext = prefs.getString(KEY_ENCRYPTED_VAULT_KEY, null) ?: throw IllegalStateException("Vault key missing")
+        val outerIv = prefs.getString(KEY_VAULT_KEY_IV_OUTER, null) ?: throw IllegalStateException("Outer IV missing")
+        val innerIv = prefs.getString(KEY_VAULT_KEY_IV_INNER, null) ?: throw IllegalStateException("Inner IV missing")
         
         // Layer 2: Unwrap from hardware-backed Root Key
         val outerEncData = EncryptedData(Base64.decode(outerCiphertext, Base64.NO_WRAP), Base64.decode(outerIv, Base64.NO_WRAP))
@@ -123,6 +139,24 @@ class MasterPasswordManager @Inject constructor(
         SensitiveDataManager.clearSensitiveData(password)
         innerCiphertext.fill(0)
         rawVaultKey.fill(0)
+    }
+
+    /**
+     * Legacy support for setupVault/unlockVault without explicit userId
+     */
+    fun setupVault(context: Context, password: CharArray) {
+        val uid = currentUserId ?: throw IllegalStateException("User ID not set")
+        setupVault(context, password, uid)
+    }
+
+    fun unlockVault(context: Context, password: CharArray) {
+        val uid = currentUserId ?: throw IllegalStateException("User ID not set")
+        unlockVault(context, password, uid)
+    }
+
+    fun setUserId(userId: String) {
+        currentUserId = userId
+        cachedPrefs = null // Clear cache so next getPrefs uses the new ID
     }
 
     fun getVaultKey(): SecretKeySpec? = vaultKey
@@ -152,6 +186,7 @@ class MasterPasswordManager @Inject constructor(
      * and the hardware root key. Used by key rotation. Vault must be unlocked.
      */
     fun installNewVaultKey(context: Context, rawVaultKey: ByteArray) {
+        val uid = currentUserId ?: throw IllegalStateException("User ID unknown")
         val currentMasterKey = masterKey ?: throw IllegalStateException("Vault is locked")
 
         // Layer 1: Encrypt new vault key with the current Master Key
@@ -159,7 +194,7 @@ class MasterPasswordManager @Inject constructor(
         // Layer 2: Wrap with hardware-backed Root Key
         val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
 
-        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted, uid)
 
         // Update in-memory vault key
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
@@ -170,6 +205,7 @@ class MasterPasswordManager @Inject constructor(
      * Then hardens it with the hardware key and saves it locally.
      */
     fun importVaultKey(context: Context, wrappedKey: EncryptedData) {
+        val uid = currentUserId ?: throw IllegalStateException("User ID unknown")
         val currentMasterKey = masterKey ?: throw IllegalStateException("Vault is locked")
         
         // 1. Unwrap with Master Key
@@ -179,7 +215,7 @@ class MasterPasswordManager @Inject constructor(
         val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, currentMasterKey)
         val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
         
-        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted, uid)
         
         // 3. Update in memory
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
@@ -189,15 +225,15 @@ class MasterPasswordManager @Inject constructor(
     // ---------- Recovery key (forgot-password reset without data loss) ----------
 
     data class RecoveryBlob(
-        val blobB64: String,
+        val blobB64: String, 
         val ivB64: String,
-        val vaultKeyFingerprint: String = ""  // SHA-256(vaultKey)[0..7] base64. Empty = legacy blob (refused).
+        val vaultKeyFingerprint: String = ""  // SHA-256(vaultKey)[0..7] base64. Empty = legacy blob (refuse)
     )
 
     private fun computeVaultKeyFingerprint(rawVaultKey: ByteArray): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(rawVaultKey)
-        return Base64.encodeToString(hash.copyOfRange(0, 8), Base64.NO_WRAP)
+        return Base64.encodeToString(hash.sliceArray(0..7), Base64.NO_WRAP)
     }
 
     data class RecoveryMaterial(
@@ -221,7 +257,7 @@ class MasterPasswordManager @Inject constructor(
             SecureRandom().nextBytes(recBytes)
             val code = recBytes.joinToString("") { "%02X".format(it) }
             val wrapped = encryptionManager.encryptWithKey(rawVaultKey, SecretKeySpec(recBytes, "AES"))
-
+            
             codes.add(code)
             blobs.add(RecoveryBlob(
                 blobB64 = Base64.encodeToString(wrapped.cipherText, Base64.NO_WRAP),
@@ -229,7 +265,7 @@ class MasterPasswordManager @Inject constructor(
                 vaultKeyFingerprint = fingerprint
             ))
         }
-
+        
         SensitiveDataManager.clearSensitiveData(rawVaultKey)
         return RecoveryMaterial(codes.joinToString("-"), blobs)
     }
@@ -240,49 +276,40 @@ class MasterPasswordManager @Inject constructor(
      */
     fun recoverWithRecoveryCode(
         context: Context,
-        recoveryCode: String,
         blobs: List<RecoveryBlob>,
-        newMasterPassword: CharArray
+        recoveryCode: String,
+        newPassword: CharArray
     ) {
+        val uid = currentUserId ?: throw IllegalStateException("User ID unknown")
         encryptionManager.init()
         val recBytes = parseRecoveryCode(recoveryCode)
         val recoveryKeySpec = SecretKeySpec(recBytes, "AES")
-
+        
         var rawVaultKey: ByteArray? = null
         var lastError: Exception? = null
 
-        // Trial-decrypt each blob. After a successful decrypt, the unwrapped key's
-        // SHA-256 fingerprint must match the fingerprint baked into the blob at
-        // creation time. This refuses recovery if the blob set is stale (e.g. the
-        // vault was rotated since the blobs were generated) — preventing silent
-        // data destruction.
+        // Attempt to decrypt with EACH blob until one works (Zero-knowledge trial)
         for (blob in blobs) {
             try {
+                if (blob.vaultKeyFingerprint.isEmpty()) {
+                    throw IllegalStateException("Legacy recovery blob detected. Fingerprint binding required.")
+                }
                 val wrapped = EncryptedData(
                     Base64.decode(blob.blobB64, Base64.NO_WRAP),
                     Base64.decode(blob.ivB64, Base64.NO_WRAP)
                 )
                 val decryptedKey = encryptionManager.decryptWithKey(wrapped, recoveryKeySpec)
-
-                if (blob.vaultKeyFingerprint.isEmpty()) {
-                    decryptedKey.fill(0)
-                    lastError = SecurityException(
-                        "This recovery key was generated by an older version. " +
-                            "Please regenerate recovery keys from Settings -> Recovery Key."
-                    )
-                    continue
-                }
+                
+                // SECURITY: Verify that the decrypted key matches the fingerprint on the blob.
+                // This prevents "stale-blob overwrite" where an old recovery key successfully 
+                // decrypts an old vault key and silently installs it, destroying current data.
                 val actual = computeVaultKeyFingerprint(decryptedKey)
                 if (actual != blob.vaultKeyFingerprint) {
                     decryptedKey.fill(0)
-                    lastError = SecurityException(
-                        "Recovery key matched a previous version of your vault. " +
-                            "Generate a new recovery key from your active vault."
-                    )
-                    continue
+                    throw IllegalStateException("Recovery key matched a previous version of your vault. Recovery aborted.")
                 }
                 rawVaultKey = decryptedKey
-                break
+                break 
             } catch (e: Exception) {
                 lastError = e
             }
@@ -294,47 +321,46 @@ class MasterPasswordManager @Inject constructor(
         }
         recBytes.fill(0)
 
-        // Derive a fresh master key from the user's NEW master password.
-        val salt = keyDerivationManager.generateSalt()
-        val newMasterKey = keyDerivationManager.deriveKey(newMasterPassword, salt)
-
-        // Wrap the recovered vault key with the new master key, then harden with
-        // the Keystore root key.
+        val newSalt = keyDerivationManager.generateSalt()
+        val newVersion = KeyDerivationManager.LATEST_VERSION
+        val newMasterKey = keyDerivationManager.deriveKey(newPassword, newSalt, newVersion)
         val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, newMasterKey)
         val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
-        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
 
-        // Persist new salt + crypto version so subsequent unlocks succeed.
-        val prefs = getPrefs(context)
-        prefs.edit()
-            .putString(KEY_SALT, Base64.encodeToString(salt, Base64.NO_WRAP))
-            .putInt(KEY_CRYPTO_VERSION, KeyDerivationManager.LATEST_VERSION)
-            .apply()
+        saveSalt(context, newSalt, uid)
+        saveCryptoVersion(context, newVersion, uid)
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted, uid)
 
         masterKey = newMasterKey
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        lastUnlockTimestamp = System.currentTimeMillis()
+
+        SensitiveDataManager.clearSensitiveData(newPassword)
         rawVaultKey.fill(0)
     }
 
     fun saveRecoveryBlobLocal(context: Context, blobs: List<RecoveryBlob>) {
-        val combined = blobs.joinToString(";") { "${it.blobB64}|${it.ivB64}" }
-        getPrefs(context).edit()
+        val combined = blobs.joinToString(";") { "${it.blobB64}|${it.ivB64}|${it.vaultKeyFingerprint}" }
+        val uid = currentUserId ?: return
+        getPrefs(context, uid).edit()
             .putString(KEY_RECOVERY_BLOB, combined)
             .apply()
     }
 
     fun getLocalRecoveryBlobs(context: Context): List<RecoveryBlob> {
-        val combined = getStoredValue(context, KEY_RECOVERY_BLOB) ?: return emptyList()
+        val uid = currentUserId ?: return emptyList()
+        val combined = getPrefs(context, uid).getString(KEY_RECOVERY_BLOB, null) ?: return emptyList()
         return try {
             combined.split(";").map {
                 val parts = it.split("|")
-                RecoveryBlob(parts[0], parts[1])
+                RecoveryBlob(parts[0], parts[1], if (parts.size > 2) parts[2] else "")
             }
         } catch (e: Exception) { emptyList() }
     }
 
     fun clearRecoveryBlobLocal(context: Context) {
-        getPrefs(context).edit().remove(KEY_RECOVERY_BLOB).remove(KEY_RECOVERY_IV).apply()
+        val uid = currentUserId ?: return
+        getPrefs(context, uid).edit().remove(KEY_RECOVERY_BLOB).remove(KEY_RECOVERY_IV).apply()
     }
 
     private fun formatRecoveryCode(bytes: ByteArray): String =
@@ -351,6 +377,7 @@ class MasterPasswordManager @Inject constructor(
      */
     fun changeMasterPassword(context: Context, newPassword: CharArray) {
         val currentVaultKey = vaultKey ?: throw IllegalStateException("Vault must be unlocked")
+        val uid = currentUserId ?: throw IllegalStateException("User ID unknown")
         
         val newSalt = keyDerivationManager.generateSalt()
         val newVersion = KeyDerivationManager.LATEST_VERSION
@@ -366,9 +393,9 @@ class MasterPasswordManager @Inject constructor(
         val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
         
         // Persist everything
-        saveSalt(context, newSalt)
-        saveCryptoVersion(context, newVersion)
-        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted)
+        saveSalt(context, newSalt, uid)
+        saveCryptoVersion(context, newVersion, uid)
+        saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted, uid)
         
         // Update in-memory keys
         masterKey = newMasterKey
@@ -376,8 +403,6 @@ class MasterPasswordManager @Inject constructor(
     }
 
     fun lockVault() {
-        // Note: SecretKeySpec.getEncoded() returns a COPY, so it cannot be wiped in place.
-        // Dropping the references and letting GC reclaim them is the real protection.
         masterKey = null
         vaultKey = null
         lastUnlockTimestamp = 0
@@ -397,19 +422,23 @@ class MasterPasswordManager @Inject constructor(
     }
 
     fun getAuthTimeout(context: android.content.Context): Long {
-        return getPrefs(context).getLong(KEY_AUTH_TIMEOUT, DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS)
+        val uid = currentUserId ?: return DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS
+        return getPrefs(context, uid).getLong(KEY_AUTH_TIMEOUT, DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS)
     }
 
     fun setAuthTimeout(context: android.content.Context, timeoutMs: Long) {
-        getPrefs(context).edit().putLong(KEY_AUTH_TIMEOUT, timeoutMs).apply()
+        val uid = currentUserId ?: return
+        getPrefs(context, uid).edit().putLong(KEY_AUTH_TIMEOUT, timeoutMs).apply()
     }
 
     fun shouldLockOnExit(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_LOCK_ON_EXIT, true)
+        val uid = currentUserId ?: return true
+        return getPrefs(context, uid).getBoolean(KEY_LOCK_ON_EXIT, true)
     }
 
     fun setLockOnExit(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_LOCK_ON_EXIT, enabled).apply()
+        val uid = currentUserId ?: return
+        getPrefs(context, uid).edit().putBoolean(KEY_LOCK_ON_EXIT, enabled).apply()
     }
 
     /**
@@ -424,33 +453,36 @@ class MasterPasswordManager @Inject constructor(
      */
     fun onTrimMemory(level: Int, context: Context? = null) {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            // Only wipe keys if the user's policy says to lock on exit.
-            // If context is null (legacy call), default to locking for safety.
             if (context == null || shouldLockOnExit(context)) {
                 lockVault()
             }
         }
     }
 
-    private fun saveSalt(context: Context, salt: ByteArray) {
-        getPrefs(context).edit().putString(KEY_SALT, Base64.encodeToString(salt, Base64.NO_WRAP)).apply()
+    private fun saveSalt(context: Context, salt: ByteArray, userId: String) {
+        getPrefs(context, userId).edit().putString(KEY_SALT, Base64.encodeToString(salt, Base64.NO_WRAP)).apply()
     }
 
-    fun getSalt(context: Context): ByteArray? {
-        val saltString = getPrefs(context).getString(KEY_SALT, null) ?: return null
+    fun getSalt(context: Context, userId: String): ByteArray? {
+        val saltString = getPrefs(context, userId).getString(KEY_SALT, null) ?: return null
         return Base64.decode(saltString, Base64.NO_WRAP)
     }
 
-    private fun saveCryptoVersion(context: Context, version: Int) {
-        getPrefs(context).edit().putInt(KEY_CRYPTO_VERSION, version).apply()
+    fun getSalt(context: Context): ByteArray? {
+        val uid = currentUserId ?: return null
+        return getSalt(context, uid)
     }
 
-    fun getCryptoVersion(context: Context): Int {
-        return getPrefs(context).getInt(KEY_CRYPTO_VERSION, KeyDerivationManager.LATEST_VERSION)
+    private fun saveCryptoVersion(context: Context, version: Int, userId: String) {
+        getPrefs(context, userId).edit().putInt(KEY_CRYPTO_VERSION, version).apply()
     }
 
-    private fun saveHardenedVaultKey(context: Context, innerIv: ByteArray, outerEnc: EncryptedData) {
-        getPrefs(context).edit().apply {
+    fun getCryptoVersion(context: Context, userId: String): Int {
+        return getPrefs(context, userId).getInt(KEY_CRYPTO_VERSION, KeyDerivationManager.LATEST_VERSION)
+    }
+
+    private fun saveHardenedVaultKey(context: Context, innerIv: ByteArray, outerEnc: EncryptedData, userId: String) {
+        getPrefs(context, userId).edit().apply {
             putString(KEY_ENCRYPTED_VAULT_KEY, Base64.encodeToString(outerEnc.cipherText, Base64.NO_WRAP))
             putString(KEY_VAULT_KEY_IV_OUTER, Base64.encodeToString(outerEnc.iv, Base64.NO_WRAP))
             putString(KEY_VAULT_KEY_IV_INNER, Base64.encodeToString(innerIv, Base64.NO_WRAP))
@@ -458,20 +490,20 @@ class MasterPasswordManager @Inject constructor(
         }
     }
 
-    private fun getStoredValue(context: Context, key: String): String? = getPrefs(context).getString(key, null)
-
-    private fun getPrefs(context: Context): android.content.SharedPreferences {
-        cachedPrefs?.let { return it }
+    private fun getPrefs(context: Context, userId: String): android.content.SharedPreferences {
+        if (currentUserId == userId && cachedPrefs != null) return cachedPrefs!!
+        
         val appContext = context.applicationContext
         val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+        val safeId = android.util.Base64.encodeToString(userId.toByteArray(), android.util.Base64.NO_WRAP)
         val prefs = EncryptedSharedPreferences.create(
-            PREFS_NAME,
+            PREFS_NAME_PREFIX + safeId,
             masterKeyAlias,
             appContext,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
-        cachedPrefs = prefs
+        if (currentUserId == userId) cachedPrefs = prefs
         return prefs
     }
 }

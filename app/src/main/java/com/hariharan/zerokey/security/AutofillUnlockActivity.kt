@@ -268,7 +268,9 @@ fun AutofillUnlockScreen(
                             return@Button
                         }
                         try {
-                            masterPasswordManager.unlockVault(context, password.toCharArray())
+                            val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "unknown"
+                            masterPasswordManager.setUserId(uid)
+                            masterPasswordManager.unlockVault(context, password.toCharArray(), uid)
                             masterPasswordManager.authorizeAutofill()
                             authAttemptManager.resetAttempts()
                             isAuthenticated = true
