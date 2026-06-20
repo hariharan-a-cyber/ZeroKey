@@ -1,54 +1,52 @@
 package com.hariharan.zerokey.utils
 
-import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.core.security.BreachMonitor
+import com.hariharan.zerokey.data.model.PasswordItem
+import com.hariharan.zerokey.data.repository.PasswordRepository
 
-/**
- * Analyzes the user's vault for security weaknesses.
- */
-object PasswordHealthAnalyzer {
+data class HealthReport(
+    val weakPasswords: List<PasswordItem>,
+    val duplicatePasswords: List<PasswordItem>,
+    val compromisedPasswords: List<PasswordItem>,
+    val score: Int
+)
 
-    data class HealthReport(
-        val score: Int, // 0-100
-        val weakPasswords: List<PasswordItem>,
-        val duplicatePasswords: List<PasswordItem>,
-        val oldPasswords: List<PasswordItem>,
-        val compromisedPasswords: List<PasswordItem>
-    )
+class PasswordHealthAnalyzer(
+    private val breachMonitor: BreachMonitor,
+    private val repository: PasswordRepository? = null,
+    // Re-check at most every 7 days per credential. Cached results younger than
+    // this are trusted; older results are revalidated against HIBP.
+    private val cacheTtlMs: Long = 7L * 24 * 60 * 60 * 1000
+) {
 
-    suspend fun analyze(passwords: List<PasswordItem>, breachMonitor: BreachMonitor): HealthReport {
-        if (passwords.isEmpty()) {
-            return HealthReport(100, emptyList(), emptyList(), emptyList(), emptyList())
+    suspend fun analyze(passwords: List<PasswordItem>): HealthReport {
+        val weak = passwords.filter {
+            PasswordUtils.calculateStrength(it.password) == PasswordStrength.WEAK
         }
 
-        val weak = passwords.filter { PasswordUtils.calculateStrength(it.password) in listOf(PasswordStrength.WEAK, PasswordStrength.MEDIUM) }
-        
-        val duplicates = passwords.groupBy { it.password }
-            .filter { it.value.size > 1 }
-            .flatMap { it.value }
+        val passwordCounts = passwords.groupBy { it.password }
+        val duplicates = passwordCounts.filter { it.value.size > 1 }.values.flatten()
 
-        // Consider passwords older than 6 months as 'old'
-        val sixMonthsAgo = System.currentTimeMillis() - 15552000000L
-        val old = passwords.filter { item ->
-            item.createdAt < sixMonthsAgo
-        }
-        
-        // Query breachMonitor for each password
+        // Breach check: re-use cached result when fresh; otherwise call HIBP
+        // (k-anonymity protected) and persist the result for next time.
+        val now = System.currentTimeMillis()
         val compromised = passwords.filter { item ->
-            breachMonitor.checkBreach(item.password.toCharArray())
+            val cacheFresh = item.lastBreachCheck > 0 &&
+                (now - item.lastBreachCheck) < cacheTtlMs
+            if (cacheFresh) {
+                item.breachFound
+            } else {
+                val found = breachMonitor.checkBreach(item.password.toCharArray())
+                repository?.markBreachChecked(item.id, found)
+                found
+            }
         }
 
-        // Calculate score
-        val total = passwords.size
-        val penalty = (weak.size * 5) + (duplicates.size * 10) + (compromised.size * 25) + (old.size * 2)
-        val score = (100 - (penalty / total.coerceAtLeast(1))).coerceIn(0, 100)
+        val total = passwords.size.coerceAtLeast(1)
+        val penalty = weak.size * 2 + duplicates.size * 1 + compromised.size * 5
+        val rawScore = 100 - (penalty * 100 / total).coerceIn(0, 100)
+        val score = rawScore.coerceIn(0, 100)
 
-        return HealthReport(
-            score = score,
-            weakPasswords = weak,
-            duplicatePasswords = duplicates,
-            oldPasswords = old,
-            compromisedPasswords = compromised
-        )
+        return HealthReport(weak, duplicates, compromised, score)
     }
 }

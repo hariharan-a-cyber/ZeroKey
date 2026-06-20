@@ -26,17 +26,17 @@ import javax.inject.Singleton
 @Singleton
 class PasswordRepository @Inject constructor(
     private val passwordDao: PasswordDao,
-    private val vaultMetadataDao: VaultMetadataDao? = null,
     private val masterPasswordManager: MasterPasswordManager,
-    private val encryptionManager: EncryptionManager
+    private val encryptionManager: EncryptionManager,
+    private val vaultMetadataDao: VaultMetadataDao
 ) {
 
     suspend fun getPasswords(): List<PasswordItem> = withContext(Dispatchers.IO) {
-        passwordDao.getAllPasswords().map { 
+        passwordDao.getAllPasswordsList().map { entity ->
             PasswordItem(
-                id = it.id, 
-                encryptedEntity = it, 
-                isFavorite = it.isFavorite, 
+                id = entity.id, 
+                encryptedEntity = entity, 
+                isFavorite = entity.isFavorite, 
                 masterPasswordManager = masterPasswordManager, 
                 encryptionManager = encryptionManager
             ) 
@@ -44,7 +44,19 @@ class PasswordRepository @Inject constructor(
     }
 
     suspend fun getAllEntities(): List<PasswordEntity> = withContext(Dispatchers.IO) {
-        passwordDao.getAllPasswords()
+        passwordDao.getAllPasswordsList()
+    }
+
+    /**
+     * Persist a breach-check result so we don't re-ping HIBP for the same password.
+     * Used by PasswordHealthAnalyzer to cache results for ~7 days per credential.
+     */
+    suspend fun markBreachChecked(id: Int, breached: Boolean) {
+        val entity = passwordDao.getPasswordById(id) ?: return
+        passwordDao.update(entity.copy(
+            lastBreachCheck = System.currentTimeMillis(),
+            breachFound = breached
+        ))
     }
 
     suspend fun syncEntity(entity: PasswordEntity) = withContext(Dispatchers.IO) {
@@ -56,14 +68,28 @@ class PasswordRepository @Inject constructor(
     }
 
     suspend fun getPasswordById(id: Int): PasswordItem? = withContext(Dispatchers.IO) {
-        passwordDao.getPasswordById(id)?.let { 
+        passwordDao.getPasswordById(id)?.let { entity ->
             PasswordItem(
-                id = it.id, 
-                encryptedEntity = it, 
-                isFavorite = it.isFavorite, 
+                id = entity.id, 
+                encryptedEntity = entity, 
+                isFavorite = entity.isFavorite,
                 masterPasswordManager = masterPasswordManager, 
                 encryptionManager = encryptionManager
             ) 
+        }
+    }
+
+    private fun decryptField(ciphertext: String, iv: String, createdAt: Long, entity: PasswordEntity): String {
+        val vaultKey = masterPasswordManager.getVaultKey() ?: return "[Vault Locked]"
+        val version = entity.encryptionVersion
+        val recordUid = entity.recordUid ?: ""
+        val sVersion = entity.schemaVersion
+        val aad = "v$version|s$sVersion|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
+        val data = EncryptedData(Base64.decode(ciphertext, Base64.NO_WRAP), Base64.decode(iv, Base64.NO_WRAP))
+        return try {
+            encryptionManager.decryptWithKey(data, vaultKey, aad).decodeToString()
+        } catch (e: Exception) {
+            "[Decryption Error]"
         }
     }
 
@@ -72,19 +98,19 @@ class PasswordRepository @Inject constructor(
     }
 
     suspend fun getVaultVersion(): Long = withContext(Dispatchers.IO) {
-        vaultMetadataDao?.getMetadata()?.vaultVersion ?: 0L
+        vaultMetadataDao.getMetadata()?.vaultVersion ?: 0L
     }
 
     suspend fun getVaultEpochId(): String = withContext(Dispatchers.IO) {
-        val current = vaultMetadataDao?.getMetadata()
+        val current = vaultMetadataDao.getMetadata()
         if (current != null && current.vaultEpochId.isNotEmpty()) {
             current.vaultEpochId
         } else {
             val newEpoch = java.util.UUID.randomUUID().toString()
             if (current != null) {
-                vaultMetadataDao?.updateMetadata(current.copy(vaultEpochId = newEpoch))
+                vaultMetadataDao.updateMetadata(current.copy(vaultEpochId = newEpoch))
             } else {
-                vaultMetadataDao?.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = newEpoch))
+                vaultMetadataDao.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = newEpoch))
             }
             newEpoch
         }
@@ -92,20 +118,20 @@ class PasswordRepository @Inject constructor(
 
     suspend fun setVaultEpochId(epoch: String) = withContext(Dispatchers.IO) {
         if (epoch.isEmpty()) return@withContext
-        val current = vaultMetadataDao?.getMetadata()
+        val current = vaultMetadataDao.getMetadata()
         if (current != null) {
             vaultMetadataDao.updateMetadata(current.copy(vaultEpochId = epoch))
         } else {
-            vaultMetadataDao?.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = epoch))
+            vaultMetadataDao.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = epoch))
         }
     }
 
     suspend fun getLastKnownHmac(): String? = withContext(Dispatchers.IO) {
-        vaultMetadataDao?.getMetadata()?.lastKnownHmac
+        vaultMetadataDao.getMetadata()?.lastKnownHmac
     }
 
     suspend fun updateVaultVersion(newVersion: Long, hmac: String? = null) = withContext(Dispatchers.IO) {
-        val current = vaultMetadataDao?.getMetadata()
+        val current = vaultMetadataDao.getMetadata()
         if (current != null) {
             vaultMetadataDao.updateMetadata(current.copy(
                 vaultVersion = newVersion, 
@@ -113,7 +139,7 @@ class PasswordRepository @Inject constructor(
                 lastKnownHmac = hmac ?: current.lastKnownHmac
             ))
         } else {
-            vaultMetadataDao?.updateMetadata(VaultMetadata(
+            vaultMetadataDao.updateMetadata(VaultMetadata(
                 vaultVersion = newVersion, 
                 lastSyncTimestamp = System.currentTimeMillis(), 
                 deviceId = "local",
@@ -124,9 +150,9 @@ class PasswordRepository @Inject constructor(
 
     suspend fun syncWithRemote(remoteEntities: List<PasswordEntity>) = withContext(Dispatchers.IO) {
         // Implement record-level synchronization
-        val localEntities = passwordDao.getAllPasswords().associateBy { it.id }
+        val localEntities = passwordDao.getAllPasswordsList().associateBy { it.id }
         
-        remoteEntities.forEach { remote ->
+        remoteEntities.forEach { remote: PasswordEntity ->
             val local = localEntities[remote.id]
             if (local == null || remote.lastModified > local.lastModified) {
                 passwordDao.insertPassword(remote)
@@ -134,55 +160,52 @@ class PasswordRepository @Inject constructor(
         }
     }
 
-    suspend fun savePassword(service: String, username: String, password: String, notes: String? = null, id: Int = 0) = withContext(Dispatchers.IO) {
-        val vaultKey = masterPasswordManager.getVaultKey() 
-            ?: throw IllegalStateException("Vault must be unlocked before saving passwords")
+    suspend fun savePassword(
+        serviceName: String,
+        username: String,
+        password: String,
+        notes: String? = null,
+        id: Int? = null
+    ): Long {
+        val vaultKey = masterPasswordManager.getVaultKey()
+            ?: throw IllegalStateException("Vault is locked")
 
-        // Safety: never persist a decryption-error placeholder as if it were real data.
-        val placeholders = setOf("[Decryption Error]", "[Vault Locked]")
-        require(password !in placeholders && service !in placeholders && username !in placeholders) {
-            "Refusing to save a decryption-error placeholder over real data"
-        }
-
-        // If updating, preserve original creation time and favorite status
-        var existingEntity: PasswordEntity? = null
-        if (id != 0) {
-            existingEntity = passwordDao.getPasswordById(id)
-        }
-
+        val existingEntity = id?.let { passwordDao.getPasswordById(it) }
         val createdAt = existingEntity?.createdAt ?: System.currentTimeMillis()
         val isFavorite = existingEntity?.isFavorite ?: false
-        val recordUid = existingEntity?.recordUid ?: java.util.UUID.randomUUID().toString()
-        val version = 1
+        // recordUid is non-null in the entity now. Existing rows missing one were
+        // backfilled by MIGRATION_5_6; new rows get a fresh UUID here.
+        val recordUid = existingEntity?.recordUid?.takeIf { it.isNotBlank() }
+            ?: java.util.UUID.randomUUID().toString()
+        val encryptionVersion = 1
         val schemaVersion = 6
-        
-        // CRITICAL: We bind the ciphertext to the record's unique ID, creation time, and SCHEMA version.
-        // This prevents "Cut-and-Paste" attacks and future migration ambiguity.
-        val aad = "v$version|s$schemaVersion|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
+        val aad = "v$encryptionVersion|s$schemaVersion|$recordUid|$createdAt"
+            .toByteArray(Charsets.UTF_8)
 
-        val serviceNameEnc = encryptionManager.encryptWithKey(service.toByteArray(), vaultKey, aad)
-        val usernameEnc = encryptionManager.encryptWithKey(username.toByteArray(), vaultKey, aad)
-        val passwordEnc = encryptionManager.encryptWithKey(password.toByteArray(), vaultKey, aad)
-        val notesEnc = notes?.let { encryptionManager.encryptWithKey(it.toByteArray(), vaultKey, aad) }
+        val encService = encryptionManager.encryptWithKey(serviceName.toByteArray(), vaultKey, aad)
+        val encUsername = encryptionManager.encryptWithKey(username.toByteArray(), vaultKey, aad)
+        val encPassword = encryptionManager.encryptWithKey(password.toByteArray(), vaultKey, aad)
+        val encNotes = notes?.let { encryptionManager.encryptWithKey(it.toByteArray(), vaultKey, aad) }
 
         val entity = PasswordEntity(
-            id = id,
-            encryptedServiceName = Base64.encodeToString(serviceNameEnc.cipherText, Base64.NO_WRAP),
-            serviceNameIv = Base64.encodeToString(serviceNameEnc.iv, Base64.NO_WRAP),
-            encryptedUsername = Base64.encodeToString(usernameEnc.cipherText, Base64.NO_WRAP),
-            usernameIv = Base64.encodeToString(usernameEnc.iv, Base64.NO_WRAP),
-            encryptedPassword = Base64.encodeToString(passwordEnc.cipherText, Base64.NO_WRAP),
-            passwordIv = Base64.encodeToString(passwordEnc.iv, Base64.NO_WRAP),
-            encryptedNotes = notesEnc?.let { Base64.encodeToString(it.cipherText, Base64.NO_WRAP) },
-            notesIv = notesEnc?.let { Base64.encodeToString(it.iv, Base64.NO_WRAP) },
+            id = id ?: 0,
+            encryptedServiceName = android.util.Base64.encodeToString(encService.cipherText, android.util.Base64.NO_WRAP),
+            serviceNameIv = android.util.Base64.encodeToString(encService.iv, android.util.Base64.NO_WRAP),
+            encryptedUsername = android.util.Base64.encodeToString(encUsername.cipherText, android.util.Base64.NO_WRAP),
+            usernameIv = android.util.Base64.encodeToString(encUsername.iv, android.util.Base64.NO_WRAP),
+            encryptedPassword = android.util.Base64.encodeToString(encPassword.cipherText, android.util.Base64.NO_WRAP),
+            passwordIv = android.util.Base64.encodeToString(encPassword.iv, android.util.Base64.NO_WRAP),
+            encryptedNotes = encNotes?.let { android.util.Base64.encodeToString(it.cipherText, android.util.Base64.NO_WRAP) },
+            notesIv = encNotes?.let { android.util.Base64.encodeToString(it.iv, android.util.Base64.NO_WRAP) },
             isFavorite = isFavorite,
             createdAt = createdAt,
             lastModified = System.currentTimeMillis(),
             recordUid = recordUid,
-            encryptionVersion = version,
+            encryptionVersion = encryptionVersion,
             schemaVersion = schemaVersion
         )
-        passwordDao.insertPassword(entity)
+
+        return passwordDao.insertPassword(entity)
     }
 
     /**
@@ -221,7 +244,7 @@ class PasswordRepository @Inject constructor(
 
         // 5. Reset epoch for a clean cryptographic break.
         val newEpoch = java.util.UUID.randomUUID().toString()
-        val current = vaultMetadataDao?.getMetadata()
+        val current = vaultMetadataDao.getMetadata()
         if (current != null) {
             vaultMetadataDao.updateMetadata(current.copy(
                 vaultEpochId = newEpoch,
@@ -229,7 +252,7 @@ class PasswordRepository @Inject constructor(
                 lastKnownHmac = null
             ))
         } else {
-            vaultMetadataDao?.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = newEpoch))
+            vaultMetadataDao.updateMetadata(VaultMetadata(vaultVersion = 0, lastSyncTimestamp = 0, deviceId = "local", vaultEpochId = newEpoch))
         }
     }
 }

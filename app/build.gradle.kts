@@ -70,16 +70,10 @@ android {
 
 dependencies {
     // Modular Dependencies
-    implementation(project(":domain"))
-    implementation(project(":data"))
     implementation(project(":core:crypto"))
     implementation(project(":core:security"))
     implementation(project(":core:common"))
     implementation(project(":core:database"))
-    implementation(project(":feature:vault"))
-    implementation(project(":feature:autofill"))
-    implementation(project(":feature:securitydashboard"))
-    implementation(project(":feature:settings"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

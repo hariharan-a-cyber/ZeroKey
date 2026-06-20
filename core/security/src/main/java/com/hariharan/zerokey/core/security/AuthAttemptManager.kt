@@ -3,77 +3,82 @@ package com.hariharan.zerokey.core.security
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Requirement 10: Brute-force protection with exponential backoff.
- */
 @Singleton
-class AuthAttemptManager @Inject constructor(@ApplicationContext private val context: Context) {
-
-    private val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
-
-    private val prefs = EncryptedSharedPreferences.create(
-        "auth_attempts_prefs",
-        masterKeyAlias,
-        context,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
-
+class AuthAttemptManager @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
     companion object {
-        private const val KEY_ATTEMPTS = "failed_attempts"
-        private const val KEY_LOCKOUT_TIME = "lockout_time"
+        private const val PREFS_NAME = "auth_attempts_prefs"
+        private const val KEY_FAILED_COUNT = "failed_count"
+        private const val KEY_LAST_FAILED_AT = "last_failed_at"
+        private const val KEY_LOCKED_UNTIL = "locked_until"
     }
 
-    fun recordFailedAttempt(userId: String = "unknown") {
-        val attempts = getFailedAttempts() + 1
-        prefs.edit().putInt(KEY_ATTEMPTS, attempts).apply()
-        
-        // Security Logging: Track masked user and device.
-        val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-        com.hariharan.zerokey.core.common.PrivacyLogger.e("SecurityAuth", "BRUTE_FORCE_ALERT: attempt #$attempts for ${com.hariharan.zerokey.core.common.PrivacyLogger.mask(userId)} on ${com.hariharan.zerokey.core.common.PrivacyLogger.mask(deviceId)}")
-
-        val lockoutDuration = calculateLockoutDuration(attempts)
-        if (lockoutDuration > 0) {
-            prefs.edit().putLong(KEY_LOCKOUT_TIME, System.currentTimeMillis() + lockoutDuration).apply()
-        }
+    private val prefs by lazy {
+        EncryptedSharedPreferences.create(
+            PREFS_NAME,
+            MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
+            context,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
     }
 
+    /**
+     * Doubling backoff with no ceiling. The 3 free attempts are kept for genuine
+     * typos; after that, the cost rises sharply: 15s, 1m, 5m, 15m, 1h, 4h, 24h,
+     * and 7 days for every attempt beyond.
+     */
     private fun calculateLockoutDuration(attempts: Int): Long {
-        return when (attempts) {
-            in 1..5 -> 0L       // No timeout for first 5 attempts
-            6 -> 30_000L        // 30s
-            7 -> 60_000L        // 1m
-            8 -> 120_000L       // 2m
-            9 -> 300_000L       // 5m
-            10 -> 900_000L      // 15m
-            else -> if (attempts > 10) 900_000L else 0L
+        return when {
+            attempts <= 3 -> 0L
+            attempts == 4 -> 15_000L
+            attempts == 5 -> 60_000L
+            attempts == 6 -> 5 * 60_000L
+            attempts == 7 -> 15 * 60_000L
+            attempts == 8 -> 60 * 60_000L
+            attempts == 9 -> 4 * 60 * 60_000L
+            attempts == 10 -> 24 * 60 * 60_000L
+            else -> 7L * 24 * 60 * 60_000L
         }
     }
 
+    fun recordFailedAttempt(context: String = ""): Long {
+        val count = prefs.getInt(KEY_FAILED_COUNT, 0) + 1
+        val now = System.currentTimeMillis()
+        val lockoutMs = calculateLockoutDuration(count)
+        val lockedUntil = if (lockoutMs > 0) now + lockoutMs else 0L
 
+        prefs.edit()
+            .putInt(KEY_FAILED_COUNT, count)
+            .putLong(KEY_LAST_FAILED_AT, now)
+            .putLong(KEY_LOCKED_UNTIL, lockedUntil)
+            .apply()
 
-
+        PrivacyLogger.w("AuthAttemptManager", "Failed attempt #$count (ctx=$context), lockout=${lockoutMs}ms")
+        return lockoutMs
+    }
 
     fun resetAttempts() {
-        prefs.edit().putInt(KEY_ATTEMPTS, 0).remove(KEY_LOCKOUT_TIME).apply()
+        prefs.edit()
+            .remove(KEY_FAILED_COUNT)
+            .remove(KEY_LAST_FAILED_AT)
+            .remove(KEY_LOCKED_UNTIL)
+            .apply()
     }
 
-    fun isLockedOut(): Boolean {
-        val lockoutUntil = prefs.getLong(KEY_LOCKOUT_TIME, 0)
-        if (lockoutUntil == 0L) return false
-        
-        return System.currentTimeMillis() < lockoutUntil
-    }
+    fun isLockedOut(): Boolean = getRemainingLockoutTime() > 0
 
-    fun getFailedAttempts(): Int = prefs.getInt(KEY_ATTEMPTS, 0)
-    
     fun getRemainingLockoutTime(): Long {
-        val lockoutUntil = prefs.getLong(KEY_LOCKOUT_TIME, 0)
-        if (lockoutUntil == 0L) return 0
-        return (lockoutUntil - System.currentTimeMillis()).coerceAtLeast(0)
+        val until = prefs.getLong(KEY_LOCKED_UNTIL, 0L)
+        val now = System.currentTimeMillis()
+        return if (until > now) until - now else 0L
     }
+
+    fun getCurrentAttemptCount(): Int = prefs.getInt(KEY_FAILED_COUNT, 0)
 }

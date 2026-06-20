@@ -42,13 +42,8 @@ class DeviceSyncManager(
                 return SyncResult.Failure("DEVICE_REVOKED: This device no longer has access to the vault.")
             }
 
-
-
-            try {
-                firestore.collection("connection_test").document(userId).set(mapOf("last_attempt" to System.currentTimeMillis())).await()
-            } catch (e: Exception) {
-                PrivacyLogger.e(TAG, "Firestore Network Test: FAILED. Error: ${PrivacyLogger.sanitizeError(e.message)}")
-            }
+            // (Connection probe removed — it leaked sync-attempt timestamps keyed
+            // by userId to the server. The push below already surfaces errors.)
 
             val encryptedVault = cryptoEngine.encryptAesGcm(
                 plaintext = plaintextVaultJson.toByteArray(Charsets.UTF_8),
@@ -58,7 +53,7 @@ class DeviceSyncManager(
             val currentVersion = getCurrentVersion(userId)
             val newVersion = currentVersion + 1
 
-            val deviceId = deviceTrustManager?.getCurrentDeviceId() ?: userId
+            val deviceId = deviceTrustManager?.getDeviceId() ?: userId
             val timestamp = System.currentTimeMillis()
             val wrappedKeyB64 = wrappedKey?.cipherText?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } ?: ""
             val hmacInput = buildHmacInput(deviceId, newVersion, timestamp, wrappedKeyB64, encryptedVault, vaultEpochId, previousSnapshotHmac ?: "")

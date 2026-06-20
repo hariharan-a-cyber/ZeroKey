@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.hariharan.zerokey.core.security.MasterPasswordManager
 import com.hariharan.zerokey.core.crypto.EncryptedData
 import com.hariharan.zerokey.core.crypto.HmacEngine
+import com.hariharan.zerokey.security.FeatureAccessManager
 import com.hariharan.zerokey.security.PrivacyModeManager
 import com.hariharan.zerokey.sync.DeviceSyncManager
 import com.hariharan.zerokey.sync.PullResult
@@ -29,6 +30,7 @@ class SyncViewModel @Inject constructor(
     private val syncManager: DeviceSyncManager,
     private val masterPasswordManager: MasterPasswordManager,
     private val hmacEngine: HmacEngine,
+    private val featureAccessManager: FeatureAccessManager,
     private val privacyModeManager: PrivacyModeManager
 ) : AndroidViewModel(application) {
 
@@ -37,29 +39,37 @@ class SyncViewModel @Inject constructor(
 
     fun performSync(userId: String) {
         viewModelScope.launch {
+            if (!featureAccessManager.hasAccess(FeatureAccessManager.Feature.CLOUD_SYNC)) {
+                _syncState.value = SyncStatus.Error("Cloud Sync requires an active subscription.")
+                return@launch
+            }
             if (privacyModeManager.isOfflineOnly()) {
                 _syncState.value = SyncStatus.Error("Offline (Stealth) mode is ON. Turn it off in the vault menu to sync.")
                 return@launch
             }
             _syncState.value = SyncStatus.Syncing
-            
-            try {
-                val vaultKey = masterPasswordManager.getVaultKey() 
-                    ?: throw IllegalStateException("Vault is locked")
-                
-                val encryptionKey = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-enc-v1")
-                val hmacKey = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-mac-v1")
 
+            val vaultKey = masterPasswordManager.getVaultKey()
+            if (vaultKey == null) {
+                _syncState.value = SyncStatus.Error("Vault must be unlocked first.")
+                return@launch
+            }
+
+            val encKeyBytes = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-enc-v1")
+            val macKeyBytes = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-mac-v1")
+
+            try {
+                // Adapting provided logic to existing pullVaultSnapshot signature and results.
                 val localPasswords = repository.getPasswords()
                 val localJson = Json.encodeToString(ListSerializer(PasswordEntity.serializer()), localPasswords.map { it.toEntity() })
                 val localVersion = repository.getVaultVersion()
                 val localEpochId = repository.getVaultEpochId()
                 val lastKnownHmac = repository.getLastKnownHmac()
-                
+
                 val pullResult = syncManager.pullVaultSnapshot(
                     userId = userId,
-                    encryptionKey = encryptionKey,
-                    hmacKey = hmacKey,
+                    encryptionKey = encKeyBytes,
+                    hmacKey = macKeyBytes,
                     localVersion = localVersion,
                     localVaultJson = localJson,
                     localEpochId = localEpochId,
@@ -68,76 +78,65 @@ class SyncViewModel @Inject constructor(
 
                 when (pullResult) {
                     is PullResult.Success -> {
-                        // Apply the merged remote+local set locally, and adopt the remote epoch.
                         val mergedEntities = Json.decodeFromString(ListSerializer(PasswordEntity.serializer()), pullResult.plaintextVault)
                         repository.syncWithRemote(mergedEntities)
                         repository.setVaultEpochId(pullResult.epochId)
-
-                        // Push the merged result so this device's edits propagate to the cloud.
-                        val pushBack = syncManager.pushVaultSnapshot(
-                            userId = userId,
-                            plaintextVaultJson = pullResult.plaintextVault,
-                            encryptionKey = encryptionKey,
-                            hmacKey = hmacKey,
-                            wrappedKey = masterPasswordManager.getWrappedVaultKey(),
-                            vaultEpochId = pullResult.epochId.ifEmpty { localEpochId },
-                            previousSnapshotHmac = pullResult.snapshotHmac
-                        )
-                        if (pushBack is SyncResult.Success) {
-                            repository.updateVaultVersion(pushBack.version, pushBack.snapshotHmac)
-                        } else {
-                            repository.updateVaultVersion(pullResult.version, pullResult.snapshotHmac)
-                        }
-                        _syncState.value = SyncStatus.Success(System.currentTimeMillis())
-                    }
-                    is PullResult.Conflict -> {
-                        val mergedEntities = Json.decodeFromString(ListSerializer(PasswordEntity.serializer()), pullResult.resolvedVault)
-                        repository.syncWithRemote(mergedEntities)
-                        _syncState.value = SyncStatus.Success(System.currentTimeMillis())
                     }
                     is PullResult.NoRemoteVault -> {
-                        val pushResult = syncManager.pushVaultSnapshot(
-                            userId = userId,
-                            plaintextVaultJson = localJson,
-                            encryptionKey = encryptionKey,
-                            hmacKey = hmacKey,
-                            wrappedKey = masterPasswordManager.getWrappedVaultKey(),
-                            vaultEpochId = localEpochId,
-                            previousSnapshotHmac = null
-                        )
-                        if (pushResult is SyncResult.Success) {
-                            repository.updateVaultVersion(pushResult.version, pushResult.snapshotHmac)
-                            _syncState.value = SyncStatus.Success(System.currentTimeMillis())
-                        } else {
-                            handleSyncFailure((pushResult as SyncResult.Failure).reason)
-                        }
+                        // First-time sync — nothing to pull. Just push.
                     }
                     is PullResult.IntegrityFailure -> {
-                        val blob = pullResult.blob
-                        if (blob?.wrappedVaultKey != null && blob.wrappedVaultKeyIv != null) {
-                            try {
-                                val wrapped = EncryptedData(
-                                    cipherText = android.util.Base64.decode(blob.wrappedVaultKey, android.util.Base64.NO_WRAP),
-                                    iv = android.util.Base64.decode(blob.wrappedVaultKeyIv, android.util.Base64.NO_WRAP)
-                                )
-                                masterPasswordManager.importVaultKey(getApplication(), wrapped)
-                                performSync(userId)
-                                return@launch
-                            } catch (e: Exception) {
-                                PrivacyLogger.e("SyncViewModel", "Recovery failed: ${PrivacyLogger.sanitizeError(e.message)}")
-                                _syncState.value = SyncStatus.Error("Vault integrity check failed", true)
-                            }
-                        } else {
-                            _syncState.value = SyncStatus.Error("Vault integrity check failed", true)
-                        }
+                        // SECURITY: do NOT silently re-import a vault key on integrity
+                        // failure. A malicious/replayed remote could roll back the
+                        // local vault. Stop sync and surface the error.
+                        PrivacyLogger.e(
+                            "SyncViewModel",
+                            "Vault HMAC mismatch — refusing automatic recovery"
+                        )
+                        _syncState.value = SyncStatus.Error(
+                            "Vault integrity check failed. Sync was stopped to protect your data. " +
+                                "If you trust the remote vault, use 'Overwrite Cloud Vault' to reset.",
+                            true
+                        )
+                        return@launch
                     }
                     is PullResult.Failure -> {
-                        handleSyncFailure(pullResult.reason)
+                        _syncState.value = SyncStatus.Error(pullResult.reason)
+                        return@launch
+                    }
+                    else -> {
+                        // Handle other cases like Conflict if they still exist
+                        _syncState.value = SyncStatus.Error("Sync interrupted")
+                        return@launch
                     }
                 }
+
+                val entities = repository.getAllEntities()
+                val mergedJson = Json.encodeToString(ListSerializer(PasswordEntity.serializer()), entities)
+                
+                val pushResult = syncManager.pushVaultSnapshot(
+                    userId = userId,
+                    plaintextVaultJson = mergedJson,
+                    encryptionKey = encKeyBytes,
+                    hmacKey = macKeyBytes,
+                    wrappedKey = masterPasswordManager.getWrappedVaultKey(),
+                    vaultEpochId = repository.getVaultEpochId(),
+                    previousSnapshotHmac = repository.getLastKnownHmac()
+                )
+
+                when (pushResult) {
+                    is SyncResult.Success -> {
+                        repository.updateVaultVersion(pushResult.version, pushResult.snapshotHmac)
+                        _syncState.value = SyncStatus.Success(System.currentTimeMillis())
+                    }
+                    is SyncResult.Failure -> _syncState.value = SyncStatus.Error(pushResult.reason)
+                }
             } catch (e: Exception) {
-                PrivacyLogger.e("SyncViewModel", "Sync exception: ${PrivacyLogger.sanitizeError(e.message)}")
-                _syncState.value = SyncStatus.Error("Sync failed due to a system error.")
+                PrivacyLogger.e("SyncViewModel", "Sync failed: ${PrivacyLogger.sanitizeError(e.message)}")
+                _syncState.value = SyncStatus.Error("Sync failed.")
+            } finally {
+                encKeyBytes.fill(0)
+                macKeyBytes.fill(0)
             }
         }
     }

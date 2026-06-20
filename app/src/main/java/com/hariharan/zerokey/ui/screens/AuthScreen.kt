@@ -92,6 +92,7 @@ fun AuthScreen(
                     if (rawKey != null) {
                         masterPasswordManager.restoreVaultKey(rawKey)
                         java.util.Arrays.fill(rawKey, 0)
+                        authAttemptManager.resetAttempts()
                         onAuthSuccess()
                     }
                 }
@@ -161,6 +162,7 @@ fun AuthScreen(
                                 if (rawKey != null) {
                                     masterPasswordManager.restoreVaultKey(rawKey)
                                     java.util.Arrays.fill(rawKey, 0)
+                                    authAttemptManager.resetAttempts()
                                     onAuthSuccess()
                                 } else {
                                     errorMessage = "Biometric unlock failed."
@@ -313,7 +315,7 @@ fun AuthScreen(
                                         }
                                         if (blobs.isEmpty()) blobs.addAll(masterPasswordManager.getLocalRecoveryBlobs(context))
                                         if (blobs.isEmpty()) recError = "No recovery keys found."
-                                        else { masterPasswordManager.recoverWithRecoveryCode(context, blobs, recCode, recNewPass.toCharArray()); showRecovery = false; onAuthSuccess() }
+                                        else { masterPasswordManager.recoverWithRecoveryCode(context, recCode, blobs, recNewPass.toCharArray()); showRecovery = false; onAuthSuccess() }
                                     } catch (e: Exception) { recError = "Invalid code." }
                                     recLoading = false
                                 }

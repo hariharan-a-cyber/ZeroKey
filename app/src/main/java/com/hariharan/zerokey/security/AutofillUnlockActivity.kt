@@ -35,28 +35,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import com.hariharan.zerokey.core.database.PasswordDatabase
+import com.hariharan.zerokey.R
 import com.hariharan.zerokey.data.model.PasswordItem
 import com.hariharan.zerokey.data.repository.PasswordRepository
 import com.hariharan.zerokey.ui.theme.ZeroKeyTheme
+import com.hariharan.zerokey.core.security.MasterPasswordManager
+import com.hariharan.zerokey.core.security.AuthAttemptManager
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-import com.hariharan.zerokey.core.security.MasterPasswordManager
-import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
-/**
- * Activity that handles unlocking the vault specifically for Autofill requests.
- * Triggers biometric first, with a fallback to Master Password.
- */
 @AndroidEntryPoint
 class AutofillUnlockActivity : FragmentActivity() {
 
     @Inject lateinit var masterPasswordManager: MasterPasswordManager
     @Inject lateinit var vaultRepository: PasswordRepository
+    @Inject lateinit var authAttemptManager: AuthAttemptManager
 
     private var usernameId: AutofillId? = null
     private var passwordId: AutofillId? = null
@@ -83,12 +80,13 @@ class AutofillUnlockActivity : FragmentActivity() {
                 AutofillUnlockScreen(
                     masterPasswordManager = masterPasswordManager,
                     vaultRepository = vaultRepository,
+                    authAttemptManager = authAttemptManager,
                     isManual = isManualSearch,
-                    onUnlocked = { 
+                    onUnlocked = {
                         if (isManualSearch) {
-                            // The screen will switch to manual search view via state
+                            // Handled by state
                         } else {
-                            finalizeAutofill() 
+                            finalizeAutofill()
                         }
                     },
                     onSearchComplete = { selectedItem ->
@@ -105,27 +103,56 @@ class AutofillUnlockActivity : FragmentActivity() {
         val repository = vaultRepository
 
         CoroutineScope(Dispatchers.IO).launch {
-            val credentials = repository.getPasswords().filter {
-                it.serviceName.contains(domain, ignoreCase = true) ||
-                domain.contains(it.serviceName, ignoreCase = true)
-            }
-
-            val response = FillResponse.Builder()
-            credentials.forEach { cred ->
-                val label = if (isUnverified) "⚠️ UNVERIFIED: ${cred.username}" else cred.username
-                val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
-                    setTextViewText(android.R.id.text1, label)
+            val normalizedDomain = extractRegistrableDomain(domain)
+            val credentials = if (normalizedDomain.isEmpty()) {
+                emptyList<PasswordItem>()
+            } else {
+                repository.getPasswords().filter { cred ->
+                    extractRegistrableDomain(cred.serviceName)
+                        .equals(normalizedDomain, ignoreCase = true)
                 }
-                val datasetBuilder = Dataset.Builder(presentation)
-                usernameId?.let { datasetBuilder.setValue(it, AutofillValue.forText(cred.username)) }
-                passwordId?.let { datasetBuilder.setValue(it, AutofillValue.forText(cred.password)) }
-                response.addDataset(datasetBuilder.build())
             }
 
-            val resultIntent = Intent()
-            resultIntent.putExtra(android.view.autofill.AutofillManager.EXTRA_AUTHENTICATION_RESULT, response.build())
-            setResult(Activity.RESULT_OK, resultIntent)
-            finish()
+            val builder = FillResponse.Builder()
+            credentials.take(10).forEach { cred ->
+                val dataset = Dataset.Builder().apply {
+                    usernameId?.let {
+                        setValue(it, AutofillValue.forText(cred.username),
+                            createPresentation(cred.serviceName, cred.username))
+                    }
+                    passwordId?.let {
+                        setValue(it, AutofillValue.forText(cred.password),
+                            createPresentation(cred.serviceName, "••••••••"))
+                    }
+                }.build()
+                builder.addDataset(dataset)
+            }
+            withContext(Dispatchers.Main) {
+                val reply = Intent().apply {
+                    putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, builder.build())
+                }
+                setResult(RESULT_OK, reply)
+                finish()
+            }
+        }
+    }
+
+    private fun createPresentation(service: String, username: String): RemoteViews {
+        val label = if (isUnverified) "⚠️ UNVERIFIED: $username" else "$service: $username"
+        return RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
+            setTextViewText(android.R.id.text1, label)
+        }
+    }
+
+    private fun extractRegistrableDomain(host: String): String {
+        val parts = host.lowercase().split(".")
+        if (parts.size < 2) return host
+        val lastTwo = "${parts[parts.size - 2]}.${parts[parts.size - 1]}"
+        val multiPartTlds = listOf("co.uk", "com.br", "org.uk", "net.uk", "com.au", "co.jp", "ac.uk")
+        return if (multiPartTlds.contains(lastTwo) && parts.size >= 3) {
+            "${parts[parts.size - 3]}.$lastTwo"
+        } else {
+            lastTwo
         }
     }
 
@@ -142,8 +169,8 @@ class AutofillUnlockActivity : FragmentActivity() {
         response.addDataset(datasetBuilder.build())
 
         val resultIntent = Intent()
-        resultIntent.putExtra(android.view.autofill.AutofillManager.EXTRA_AUTHENTICATION_RESULT, response.build())
-        setResult(Activity.RESULT_OK, resultIntent)
+        resultIntent.putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, response.build())
+        setResult(RESULT_OK, resultIntent)
         finish()
     }
 }
@@ -152,6 +179,7 @@ class AutofillUnlockActivity : FragmentActivity() {
 fun AutofillUnlockScreen(
     masterPasswordManager: MasterPasswordManager,
     vaultRepository: PasswordRepository,
+    authAttemptManager: AuthAttemptManager,
     isManual: Boolean = false,
     onUnlocked: () -> Unit,
     onSearchComplete: (PasswordItem) -> Unit = {},
@@ -234,12 +262,19 @@ fun AutofillUnlockScreen(
                 Spacer(Modifier.height(24.dp))
                 Button(
                     onClick = {
+                        if (authAttemptManager.isLockedOut()) {
+                            val rem = authAttemptManager.getRemainingLockoutTime() / 1000
+                            Toast.makeText(context, "Too many attempts. Try again in ${rem}s.", Toast.LENGTH_LONG).show()
+                            return@Button
+                        }
                         try {
                             masterPasswordManager.unlockVault(context, password.toCharArray())
                             masterPasswordManager.authorizeAutofill()
+                            authAttemptManager.resetAttempts()
                             isAuthenticated = true
                             onUnlocked()
                         } catch (e: Exception) {
+                            authAttemptManager.recordFailedAttempt("autofill-unlock")
                             isError = true
                         }
                     },
@@ -261,7 +296,6 @@ fun AutofillUnlockScreen(
         }
     }
 
-    // Auto-trigger biometric on first launch
     LaunchedEffect(Unit) {
         if (!showMasterPassword && !isAuthenticated) {
             triggerBiometric(context, masterPasswordManager) {
@@ -275,7 +309,6 @@ fun AutofillUnlockScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ManualSearchScreen(repository: PasswordRepository, onSelect: (PasswordItem) -> Unit, onCancel: () -> Unit) {
-    val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var items by remember { mutableStateOf<List<PasswordItem>>(emptyList()) }
     
@@ -331,17 +364,11 @@ private fun triggerBiometric(activity: FragmentActivity, masterPasswordManager: 
         object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 super.onAuthenticationSucceeded(result)
-                // If vault key is already in memory, just refresh the auth timer.
-                // If it was wiped (lock-on-exit), biometric alone can't restore it here
-                // because we don't have BiometricVaultUnlockManager in this Activity.
-                // In that case, fall through to the master-password path.
                 if (masterPasswordManager.isUnlocked()) {
                     masterPasswordManager.authorizeAutofill()
                     onSuccess()
                 } else {
-                    // Vault key is null — biometric can't restore it without the hardware-wrapped copy.
-                    // Show the master password field instead of silently filling blank data.
-                    android.widget.Toast.makeText(activity, "Vault locked. Enter your master password.", android.widget.Toast.LENGTH_SHORT).show()
+                    Toast.makeText(activity, "Vault locked. Enter your master password.", Toast.LENGTH_SHORT).show()
                 }
             }
         })

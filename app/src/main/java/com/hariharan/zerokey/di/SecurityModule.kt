@@ -26,8 +26,6 @@ import javax.inject.Singleton
 import com.hariharan.zerokey.security.PrivacyModeManager
 import com.hariharan.zerokey.data.backup.VaultBackupManager
 import com.hariharan.zerokey.data.sync.VaultSerializer
-import com.hariharan.zerokey.emergency.EmergencyNotificationService
-import com.hariharan.zerokey.emergency.EmergencyAccessManager
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -80,14 +78,18 @@ object SecurityModule {
         encryptionManager: EncryptionManager
     ): PasswordRepository = PasswordRepository(
         database.passwordDao(), 
-        database.vaultMetadataDao(),
         masterPasswordManager,
-        encryptionManager
+        encryptionManager,
+        database.vaultMetadataDao()
     )
 
     @Provides
     @Singleton
-    fun provideAuditLogManager(database: PasswordDatabase): AuditLogManager = AuditLogManager(database.auditLogDao())
+    fun provideAuditLogManager(
+        database: PasswordDatabase,
+        masterPasswordManager: MasterPasswordManager,
+        encryptionManager: EncryptionManager
+    ): AuditLogManager = AuditLogManager(database.auditLogDao(), masterPasswordManager, encryptionManager)
 
     @Provides
     @Singleton
@@ -99,21 +101,29 @@ object SecurityModule {
 
     @Provides
     @Singleton
+    fun provideCryptoEngine(): CryptoEngine = CryptoEngine()
+
+    @Provides
+    @Singleton
     fun provideDeviceSyncManager(
         firestore: FirebaseFirestore,
         hmacEngine: HmacEngine,
+        cryptoEngine: CryptoEngine,
         deviceTrustManager: DeviceTrustManager
     ): DeviceSyncManager = DeviceSyncManager(
         firestore, 
-        CryptoEngine(), 
+        cryptoEngine, 
         hmacEngine, 
-        VaultConflictResolver(CryptoEngine(), hmacEngine), 
+        VaultConflictResolver(cryptoEngine, hmacEngine), 
         deviceTrustManager
     )
 
     @Provides
     @Singleton
-    fun provideCredentialShareManager(firestore: FirebaseFirestore, hmacEngine: HmacEngine): CredentialShareManager = CredentialShareManager(firestore, hmacEngine)
+    fun provideCredentialShareManager(
+        @ApplicationContext context: Context,
+        firestore: FirebaseFirestore
+    ): CredentialShareManager = CredentialShareManager(context, firestore)
 
     @Provides
     @Singleton
@@ -131,7 +141,7 @@ object SecurityModule {
 
     @Provides
     @Singleton
-    fun provideVaultSerializer(): VaultSerializer = VaultSerializer()
+    fun provideVaultSerializer(encryptionManager: EncryptionManager): VaultSerializer = VaultSerializer(encryptionManager)
 
     @Provides
     @Singleton
@@ -144,25 +154,4 @@ object SecurityModule {
     @Singleton
     fun provideFirebaseAuthenticator(): com.hariharan.zerokey.security.FirebaseAuthenticator = 
         com.hariharan.zerokey.security.FirebaseAuthenticator()
-
-    @Provides
-    @Singleton
-    fun provideEmergencyAccessManager(
-        firestore: FirebaseFirestore
-    ): EmergencyAccessManager = EmergencyAccessManager(
-        firestore,
-        CryptoEngine(),
-        object : EmergencyNotificationService {
-            override suspend fun notifyOwnerOfRequest(ownerId: String, contactEmail: String, cancelDeadline: Long) {
-                // TODO: Implement push notification via FCM or email when you add server-side.
-                com.hariharan.zerokey.core.common.PrivacyLogger.i("EmergencyAccess", "Access request filed. Owner should be notified.")
-            }
-            override suspend fun notifyRequestCancelled(contactEmail: String) {
-                com.hariharan.zerokey.core.common.PrivacyLogger.i("EmergencyAccess", "Access request cancelled.")
-            }
-            override suspend fun notifyAccessGranted(ownerId: String, contactEmail: String) {
-                com.hariharan.zerokey.core.common.PrivacyLogger.i("EmergencyAccess", "Emergency access granted.")
-            }
-        }
-    )
 }

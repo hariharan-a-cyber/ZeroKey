@@ -128,7 +128,7 @@ fun PasswordGeneratorScreen(
                                 Icon(Icons.Default.Refresh, "Regenerate")
                             }
                             IconButton(onClick = { 
-                                SecureClipboard.copy(context, "ZeroKey", generatedPassword)
+                                SecureClipboard.copy(context, generatedPassword)
                                 Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
                             }) {
                                 Icon(Icons.Default.ContentCopy, "Copy")

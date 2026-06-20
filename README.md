@@ -4,7 +4,7 @@
 
 ---
 
-## 🔒 Security Architecture
+## Security Architecture
 
 ZeroKey implements a robust "Zero-Knowledge" system, meaning no one—including the developers—can access your vault.
 
@@ -24,15 +24,15 @@ Your Vault Key (256-bit AES) is protected by multiple layers:
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-- **🚀 Secure Vault**: Full CRUD operations for passwords, notes, and sensitive metadata.
-- **🛡️ Security Dashboard**: Advanced analysis of password health (weak, duplicate, or breached passwords).
-- **📱 Phishing-Resistant Autofill**: Native Android Autofill service with built-in domain verification and threat-aware behavior (auto-disables if tampering is detected).
-- **☁️ Zero-Knowledge Sync**: Optional cross-device synchronization via encrypted blobs on Firestore.
-- **🤝 Secure Sharing**: Share credentials with trusted contacts using ephemeral key exchange.
-- **🚨 Emergency Access**: Cryptographic time-lock mechanism for vault recovery by trusted contacts in case of inactivity.
-- **🕵️ Stealth Hardening**: 
+- **Secure Vault**: Full CRUD operations for passwords, notes, and sensitive metadata.
+- **Security Dashboard**: Advanced analysis of password health (weak, duplicate, or breached passwords).
+- **Phishing-Resistant Autofill**: Native Android Autofill service with built-in domain verification and threat-aware behavior (auto-disables if tampering is detected).
+- **Zero-Knowledge Sync**: Optional cross-device synchronization via encrypted blobs on Firestore.
+- **Secure Sharing**: Share credentials with trusted contacts using ephemeral key exchange.
+- **Emergency Access**: Cryptographic time-lock mechanism for vault recovery by trusted contacts in case of inactivity.
+- **Stealth Hardening**: 
     - Frida/Runtime hook detection.
     - Root and Debugger detection.
     - Global screenshot/screen-recording protection (`FLAG_SECURE`).
@@ -40,7 +40,7 @@ Your Vault Key (256-bit AES) is protected by multiple layers:
 
 ---
 
-## 🛠️ Technical Stack
+## Technical Stack
 
 - **UI**: Jetpack Compose (Declarative UI)
 - **Database**: Room (SQL persistence with local encryption)
@@ -51,7 +51,7 @@ Your Vault Key (256-bit AES) is protected by multiple layers:
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Android Studio Ladybug or later.
@@ -65,7 +65,7 @@ Your Vault Key (256-bit AES) is protected by multiple layers:
 
 ---
 
-## 📜 License & Usage
+## License & Usage
 
 **This repository is public for viewing and learning purposes only.**
 

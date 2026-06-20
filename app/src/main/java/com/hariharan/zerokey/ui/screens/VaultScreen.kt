@@ -57,38 +57,47 @@ fun VaultScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showOfflineModeDialog by remember { mutableStateOf(false) }
 
-    // Export File Launcher
+    // SECURITY: uses filesDir (app-private) instead of cacheDir, and always
+    // deletes the temp file even if the copy step throws.
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         uri?.let {
             scope.launch {
-                val tempFile = File(context.cacheDir, "vault_export.json")
-                viewModel.exportVault(context, tempFile) { success ->
-                    if (success) {
+                val tempFile = File(context.filesDir, "vault_export_temp.json")
+                try {
+                    viewModel.exportVault(context, tempFile) { success ->
                         try {
-                            context.contentResolver.openOutputStream(it)?.use { output ->
-                                tempFile.inputStream().copyTo(output)
+                            if (success) {
+                                try {
+                                    context.contentResolver.openOutputStream(it)?.use { output ->
+                                        tempFile.inputStream().copyTo(output)
+                                    }
+                                    Toast.makeText(context, "Vault exported successfully", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()
                             }
-                            Toast.makeText(context, "Vault exported successfully", Toast.LENGTH_SHORT).show()
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        } finally {
+                            tempFile.delete()
                         }
-                    } else {
-                        Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()
                     }
+                } catch (e: Exception) {
+                    tempFile.delete()
+                    Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()
                 }
             }
         }
     }
 
-    // Import File Launcher
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
             scope.launch {
-                val tempFile = File(context.cacheDir, "vault_import.json")
+                val tempFile = File(context.filesDir, "vault_import_temp.json")
                 try {
                     context.contentResolver.openInputStream(it)?.use { input ->
                         tempFile.outputStream().use { output ->
@@ -96,14 +105,16 @@ fun VaultScreen(
                         }
                     }
                     viewModel.importVault(tempFile) { success ->
+                        tempFile.delete()
                         if (success) {
                             Toast.makeText(context, "Vault imported and merged", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(context, "Import failed: Invalid file or key", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Import failed: invalid file or key", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    tempFile.delete()
+                    Toast.makeText(context, "Import failed", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -544,7 +555,7 @@ fun PasswordItemCard(item: PasswordItem, viewModel: PasswordViewModel) {
             Row {
                 IconButton(
                     onClick = {
-                        SecureClipboard.copy(context, "ZeroKey", item.password)
+                        SecureClipboard.copy(context, item.password)
                         viewModel.logPasswordCopied(item.serviceName)
                     },
                     colors = IconButtonDefaults.iconButtonColors(

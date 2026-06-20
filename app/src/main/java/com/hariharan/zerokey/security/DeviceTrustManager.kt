@@ -3,122 +3,130 @@ package com.hariharan.zerokey.security
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
-import com.hariharan.zerokey.core.common.PrivacyLogger
 import com.google.firebase.firestore.FirebaseFirestore
+import com.hariharan.zerokey.core.common.PrivacyLogger
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.tasks.await
+import javax.inject.Inject
+import javax.inject.Singleton
 
-/**
- * Phase 11: Device Trust System.
- * Restricts vault sync to devices explicitly trusted by the user.
- */
-class DeviceTrustManager(
-    private val context: Context,
+data class DeviceInfo(
+    val deviceId: String,
+    val deviceName: String,
+    val isTrusted: Boolean,
+    val lastSeen: Long
+)
+
+@Singleton
+class DeviceTrustManager @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val firestore: FirebaseFirestore
 ) {
+    private val deviceId: String = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ANDROID_ID
+    ) ?: "unknown_device"
 
-    private val COLLECTION_DEVICES = "devices"
+    private val deviceName: String = "${Build.MANUFACTURER} ${Build.MODEL}"
 
-    data class DeviceInfo(
-        val deviceId: String,
-        val deviceName: String,
-        val lastSeen: Long,
-        val isTrusted: Boolean
-    )
-
-    fun getCurrentDeviceId(): String {
-        return Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+    companion object {
+        // If we haven't been able to confirm trust within this window, treat the
+        // device as suspect. Long enough to survive normal outages, short enough
+        // to limit attacker-controlled network throttling attacks.
+        private const val TRUST_FRESHNESS_TTL_MS = 24L * 60 * 60 * 1000  // 24h
     }
 
-    fun getDeviceName(): String {
-        return "${Build.MANUFACTURER} ${Build.MODEL}"
+    private val prefs by lazy {
+        context.getSharedPreferences("zk_device_trust", Context.MODE_PRIVATE)
     }
+    private fun lastSuccessfulCheckKey(userId: String) = "last_trust_check_${userId}"
 
-    /**
-     * Registers the current device in the user's trusted list.
-     * Requires biometric verification before calling this.
-     */
-    suspend fun registerCurrentDevice(userId: String) {
-        val deviceId = getCurrentDeviceId()
-        val deviceData = mapOf(
-            "deviceId" to deviceId,
-            "deviceName" to getDeviceName(),
-            "lastSeen" to System.currentTimeMillis(),
-            "trusted" to true,
-            "revoked" to false
-        )
-        
-        firestore.collection("users")
-            .document(userId)
-            .collection(COLLECTION_DEVICES)
-            .document(deviceId)
-            .set(deviceData)
-            .await()
-    }
+    fun getDeviceId(): String = deviceId
 
-    /**
-     * Checks if the current device is trusted.
-     */
-    suspend fun isCurrentDeviceTrusted(userId: String): Boolean {
-        val deviceId = getCurrentDeviceId()
-        val doc = firestore.collection("users")
-            .document(userId)
-            .collection(COLLECTION_DEVICES)
-            .document(deviceId)
-            .get()
-            .await()
-            
-        return doc.getBoolean("trusted") ?: false
-    }
-
-    /**
-     * Returns true ONLY if this device has an explicit trust record set to false (revoked).
-     * Missing record, offline, or any error -> false, so we never lock a user out by accident.
-     */
-    suspend fun isCurrentDeviceRevoked(userId: String): Boolean {
+    suspend fun getTrustedDevices(userId: String): List<DeviceInfo> {
         return try {
-            val deviceId = getCurrentDeviceId()
-            val doc = firestore.collection("users")
-                .document(userId)
-                .collection(COLLECTION_DEVICES)
-                .document(deviceId)
+            firestore.collection("users").document(userId)
+                .collection("devices")
                 .get()
                 .await()
-            doc.exists() && (doc.getBoolean("trusted") == false)
+                .map { doc ->
+                    DeviceInfo(
+                        deviceId = doc.id,
+                        deviceName = doc.getString("deviceName") ?: "Unknown Device",
+                        isTrusted = doc.getBoolean("trusted") ?: false,
+                        lastSeen = doc.getLong("lastSeen") ?: 0L
+                    )
+                }
         } catch (e: Exception) {
-            PrivacyLogger.e("DeviceTrustManager", "Trust check failed (offline?). Not locking.")
-            false
+            PrivacyLogger.e("DeviceTrustManager", "Failed to list devices: ${e.message}")
+            emptyList()
+        }
+    }
+
+    suspend fun registerCurrentDevice(userId: String) {
+        try {
+            val doc = mapOf(
+                "deviceId" to deviceId,
+                "deviceName" to deviceName,
+                "trusted" to true,
+                "revoked" to false,
+                "lastSeen" to System.currentTimeMillis()
+            )
+            firestore.collection("users").document(userId)
+                .collection("devices").document(deviceId)
+                .set(doc)
+                .await()
+        } catch (e: Exception) {
+            PrivacyLogger.e("DeviceTrustManager", "Device registration failed: ${e.message}")
         }
     }
 
     /**
-     * Revokes trust from a specific device.
+     * Returns true if this device should be considered untrusted right now.
+     *
+     *  - Firestore says trusted=false  → revoked.
+     *  - Firestore says trusted=true   → trusted; update last-success timestamp.
+     *  - Network error: if we have a recent successful check (within TTL), keep
+     *    trust; otherwise lock the vault so an attacker who throttles the network
+     *    can't keep a revoked device alive forever.
      */
-    suspend fun revokeDeviceTrust(userId: String, deviceId: String) {
-        firestore.collection("users")
-            .document(userId)
-            .collection(COLLECTION_DEVICES)
-            .document(deviceId)
-            .update(mapOf("trusted" to false, "revoked" to true))
-            .await()
+    suspend fun isCurrentDeviceRevoked(userId: String): Boolean {
+        return try {
+            val doc = firestore.collection("users").document(userId)
+                .collection("devices").document(deviceId)
+                .get()
+                .await()
+            val revoked = doc.exists() && (doc.getBoolean("trusted") == false)
+            if (!revoked) {
+                prefs.edit()
+                    .putLong(lastSuccessfulCheckKey(userId), System.currentTimeMillis())
+                    .apply()
+            }
+            revoked
+        } catch (e: Exception) {
+            val last = prefs.getLong(lastSuccessfulCheckKey(userId), 0L)
+            val stale = (last == 0L) || (System.currentTimeMillis() - last > TRUST_FRESHNESS_TTL_MS)
+            if (stale) {
+                PrivacyLogger.w(
+                    "DeviceTrustManager",
+                    "Trust check failed and freshness window expired; locking."
+                )
+                true
+            } else {
+                PrivacyLogger.i("DeviceTrustManager", "Trust check failed but recent success exists; allowing.")
+                false
+            }
+        }
     }
 
-    /**
-     * Fetches all registered devices for the user.
-     */
-    suspend fun getTrustedDevices(userId: String): List<DeviceInfo> {
-        val snapshot = firestore.collection("users")
-            .document(userId)
-            .collection(COLLECTION_DEVICES)
-            .get()
-            .await()
-            
-        return snapshot.documents.map { doc ->
-            DeviceInfo(
-                deviceId = doc.id,
-                deviceName = doc.getString("deviceName") ?: "Unknown Device",
-                lastSeen = doc.getLong("lastSeen") ?: 0L,
-                isTrusted = doc.getBoolean("trusted") ?: false
-            )
+    suspend fun revokeDevice(userId: String, deviceId: String) {
+        try {
+            firestore.collection("users").document(userId)
+                .collection("devices").document(deviceId)
+                .update(mapOf("trusted" to false, "revoked" to true))
+                .await()
+        } catch (e: Exception) {
+            PrivacyLogger.e("DeviceTrustManager", "Revoke failed: ${e.message}")
         }
     }
 }

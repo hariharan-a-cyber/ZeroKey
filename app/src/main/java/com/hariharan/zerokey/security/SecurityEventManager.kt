@@ -14,7 +14,7 @@ class SecurityEventManager(private val auditLogManager: AuditLogManager) {
      * Checks for common attack patterns in the audit logs.
      */
     suspend fun detectAnomalies(): List<SecurityAlert> {
-        val logs = auditLogManager.getLogs()
+        val logs = auditLogManager.getAllLogs()
         val alerts = mutableListOf<SecurityAlert>()
 
         // 1. Detect multiple rapid password views (Credential Harvesting)
@@ -28,7 +28,7 @@ class SecurityEventManager(private val auditLogManager: AuditLogManager) {
         }
 
         // 3. Detect sensitive exports
-        val recentExports = logs.filter { it.eventType == EventType.VAULT_EXPORTED.description && (System.currentTimeMillis() - it.timestamp < 3600000) }
+        val recentExports = logs.filter { it.eventType == EventType.VAULT_EXPORTED.name && (System.currentTimeMillis() - it.timestamp < 3600000) }
         if (recentExports.isNotEmpty()) {
             alerts.add(SecurityAlert("Vault Exported", "A backup was created within the last hour.", System.currentTimeMillis()))
         }
@@ -37,7 +37,7 @@ class SecurityEventManager(private val auditLogManager: AuditLogManager) {
     }
 
     private fun detectRapidPasswordViews(logs: List<AuditLogEntity>): Boolean {
-        val views = logs.filter { it.eventType == EventType.PASSWORD_VIEWED.description }
+        val views = logs.filter { it.eventType == EventType.PASSWORD_VIEWED.name }
             .sortedByDescending { it.timestamp }
         
         if (views.size < 5) return false
@@ -47,7 +47,7 @@ class SecurityEventManager(private val auditLogManager: AuditLogManager) {
     }
 
     private fun detectBruteForceAttempts(logs: List<AuditLogEntity>): Boolean {
-        val failures = logs.filter { it.eventType == EventType.LOGIN_FAILURE.description }
+        val failures = logs.filter { it.eventType == EventType.LOGIN_FAILURE.name }
             .sortedByDescending { it.timestamp }
             
         if (failures.size < 3) return false

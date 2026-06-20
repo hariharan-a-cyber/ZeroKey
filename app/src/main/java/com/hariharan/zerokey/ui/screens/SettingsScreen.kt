@@ -509,7 +509,7 @@ fun SettingsScreen(
             confirmButton = {
                     Button(
                         onClick = {
-                            SecureClipboard.copy(context, "ZeroKey", recoveryCodeShown ?: "")
+                            SecureClipboard.copy(context, recoveryCodeShown ?: "")
                             Toast.makeText(context, "Copied. Store it safely.", Toast.LENGTH_SHORT).show()
                             recoveryCodeShown = null
                         }

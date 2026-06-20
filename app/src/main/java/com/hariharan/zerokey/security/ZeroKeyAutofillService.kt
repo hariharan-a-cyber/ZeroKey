@@ -183,19 +183,20 @@ class ZeroKeyAutofillService : AutofillService() {
 
                 val normalizedVerifiedDomain = extractRegistrableDomain(verifiedDomain)
                 
-                // If trust is degraded (debugger attached), we skip automatic matching
-                // and only provide the manual search fallback.
                 val credentials = if (isTrustDegraded) {
                     PrivacyLogger.w("ZeroKeyAutofill", "Trust Degraded: Skipping automatic matching")
                     emptyList()
                 } else {
+                    // SECURITY: match by exact registrable-domain only. Substring
+                    // matching let attacker-controlled domains like
+                    // "google.com.attacker.io" claim credentials stored under
+                    // "google.com".
                     repository.getPasswords().filter { cred: PasswordItem ->
                         val normalizedService = extractRegistrableDomain(cred.serviceName)
-                        cred.serviceName.contains(verifiedDomain, ignoreCase = true) || 
-                        verifiedDomain.contains(cred.serviceName, ignoreCase = true) ||
-                        (normalizedService.isNotEmpty() && normalizedVerifiedDomain.isNotEmpty() && 
-                         normalizedService == normalizedVerifiedDomain)
-                    }.sortedByDescending { it.serviceName.equals(verifiedDomain, ignoreCase = true) } // Basic ranking
+                        normalizedService.isNotEmpty() &&
+                            normalizedVerifiedDomain.isNotEmpty() &&
+                            normalizedService.equals(normalizedVerifiedDomain, ignoreCase = true)
+                    }.sortedByDescending { it.serviceName.equals(verifiedDomain, ignoreCase = true) }
                 }
 
                 // ── ADD MANUAL SEARCH OPTION ─────────────────────────────────
@@ -307,8 +308,11 @@ class ZeroKeyAutofillService : AutofillService() {
                     val domain = parsed.webDomain ?: parsed.packageName ?: "Unknown"
                     val repository = vaultRepository
                     
-                    val existing = repository.getPasswords().find { 
-                        it.serviceName.contains(domain, ignoreCase = true) && it.username == parsed.username 
+                    val normalizedDomain = extractRegistrableDomain(domain)
+                    val existing = repository.getPasswords().find { cred ->
+                        extractRegistrableDomain(cred.serviceName)
+                            .equals(normalizedDomain, ignoreCase = true) &&
+                            cred.username == parsed.username
                     }
                     
                     if (existing != null) {

@@ -50,7 +50,7 @@ fun DeviceManagementScreen(
         viewModel.refreshDeviceList()
     }
     
-    var deviceToRevoke by remember { mutableStateOf<DeviceTrustManager.DeviceInfo?>(null) }
+    var deviceToRevoke by remember { mutableStateOf<com.hariharan.zerokey.security.DeviceInfo?>(null) }
     var showPostRevokeRecommendation by remember { mutableStateOf(false) }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -187,7 +187,7 @@ fun DeviceManagementScreen(
 
 @Composable
 fun DeviceItemCard(
-    device: DeviceTrustManager.DeviceInfo,
+    device: com.hariharan.zerokey.security.DeviceInfo,
     isCurrent: Boolean,
     onRevoke: () -> Unit
 ) {
