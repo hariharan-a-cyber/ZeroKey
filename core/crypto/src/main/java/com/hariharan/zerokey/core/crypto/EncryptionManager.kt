@@ -5,6 +5,7 @@ import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import com.hariharan.zerokey.core.common.PrivacyLogger
 import java.security.KeyStore
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -13,95 +14,94 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Enhanced Encryption Manager for ZeroKey.
- * Implements AES-256-GCM with Associated Authenticated Data (AAD) support.
- * Supports Hardware-backed keys (TEE) and attempts to use StrongBox (Secure Element) if available.
- */
+data class EncryptedData(val cipherText: ByteArray, val iv: ByteArray)
+
+enum class KeySecurityLevel { STRONGBOX, TEE, SOFTWARE }
+
 @Singleton
 class EncryptionManager @Inject constructor() {
-
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        private const val KEY_ALIAS = "ZeroKeyRootKey"
+        private const val ROOT_KEY_ALIAS = "ZeroKey_Root_Hardware_Key"
         private const val AES_MODE = "AES/GCM/NoPadding"
-        private const val IV_LENGTH = 12 
+        private const val IV_LENGTH = 12
         private const val AUTH_TAG_LENGTH = 128
     }
 
-    enum class KeySecurityLevel { SOFTWARE, TEE, STRONGBOX }
+    private var initialized = false
 
     fun init() {
-        generateRootKeyIfNeeded()
+        if (initialized) return
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        if (!keyStore.containsAlias(ROOT_KEY_ALIAS)) {
+            generateRootKey()
+        }
+        initialized = true
     }
 
     fun getKeySecurityLevel(): KeySecurityLevel {
         return try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-            val key = keyStore.getKey(KEY_ALIAS, null) as? SecretKey ?: return KeySecurityLevel.SOFTWARE
+            val key = keyStore.getKey(ROOT_KEY_ALIAS, null) as? SecretKey
+                ?: return KeySecurityLevel.SOFTWARE
             val factory = SecretKeyFactory.getInstance(key.algorithm, ANDROID_KEYSTORE)
             val keyInfo = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
-            
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 when (keyInfo.securityLevel) {
                     KeyProperties.SECURITY_LEVEL_STRONGBOX -> KeySecurityLevel.STRONGBOX
                     KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> KeySecurityLevel.TEE
                     else -> KeySecurityLevel.SOFTWARE
                 }
-            } else if (keyInfo.isInsideSecureHardware) {
-                KeySecurityLevel.TEE
             } else {
-                KeySecurityLevel.SOFTWARE
+                @Suppress("DEPRECATION")
+                if (keyInfo.isInsideSecureHardware) KeySecurityLevel.TEE else KeySecurityLevel.SOFTWARE
             }
         } catch (e: Exception) {
+            PrivacyLogger.w("EncryptionManager", "Security level check failed: ${e.message}")
             KeySecurityLevel.SOFTWARE
         }
     }
 
-    private fun generateRootKeyIfNeeded() {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        if (!keyStore.containsAlias(KEY_ALIAS)) {
-            try {
-                generateAesKey(KEY_ALIAS, useStrongBox = true)
-                PrivacyLogger.i("EncryptionManager", "Root key generated in StrongBox")
-            } catch (e: Exception) {
-                PrivacyLogger.w("EncryptionManager", "StrongBox unavailable, falling back to TEE: ${e.message}")
-                generateAesKey(KEY_ALIAS, useStrongBox = false)
-                PrivacyLogger.i("EncryptionManager", "Root key generated in TEE")
+    private fun generateRootKey() {
+        try {
+            val builder = KeyGenParameterSpec.Builder(
+                ROOT_KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .setRandomizedEncryptionRequired(true)
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                try { builder.setIsStrongBoxBacked(true) } catch (_: Exception) {}
             }
-        }
-    }
 
-    private fun generateAesKey(alias: String, useStrongBox: Boolean) {
-        val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-        val builder = KeyGenParameterSpec.Builder(
-            alias,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256)
-            
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            builder.setIsStrongBoxBacked(useStrongBox)
+            val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+            keyGen.init(builder.build())
+            keyGen.generateKey()
+        } catch (e: Exception) {
+            PrivacyLogger.e("EncryptionManager", "Root key generation failed: ${e.message}")
+            throw e
         }
-
-        keyGenerator.init(builder.build())
-        keyGenerator.generateKey()
     }
 
     private fun getRootKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        return keyStore.getKey(KEY_ALIAS, null) as SecretKey
+        return keyStore.getKey(ROOT_KEY_ALIAS, null) as SecretKey
     }
 
+    /**
+     * Encrypt with a software (non-Keystore) key. IV is generated by SecureRandom
+     * and supplied via GCMParameterSpec so behavior is the same on every JCE provider.
+     * NEVER use this with the Keystore root key — Keystore doesn't accept caller IVs.
+     */
     fun encryptWithKey(data: ByteArray, key: SecretKey, aad: ByteArray? = null): EncryptedData {
         val cipher = Cipher.getInstance(AES_MODE)
-        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = ByteArray(IV_LENGTH).also { SecureRandom().nextBytes(it) }
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(AUTH_TAG_LENGTH, iv))
         aad?.let { cipher.updateAAD(it) }
-        val ciphertext = cipher.doFinal(data)
-        val iv = cipher.iv
-        return EncryptedData(ciphertext, iv)
+        return EncryptedData(cipher.doFinal(data), iv)
     }
 
     fun decryptWithKey(encryptedData: EncryptedData, key: SecretKey, aad: ByteArray? = null): ByteArray {
@@ -112,16 +112,20 @@ class EncryptionManager @Inject constructor() {
         return cipher.doFinal(encryptedData.cipherText)
     }
 
+    /**
+     * Encrypt with the Android Keystore root key. The Keystore provider generates
+     * a fresh IV per call and does NOT accept a caller-supplied GCMParameterSpec
+     * for ENCRYPT_MODE. We must call init(key) without a spec for this path only.
+     */
     fun encryptWithRootKey(data: ByteArray, aad: ByteArray? = null): EncryptedData {
-        return encryptWithKey(data, getRootKey(), aad)
+        val cipher = Cipher.getInstance(AES_MODE)
+        cipher.init(Cipher.ENCRYPT_MODE, getRootKey())
+        aad?.let { cipher.updateAAD(it) }
+        val ciphertext = cipher.doFinal(data)
+        return EncryptedData(ciphertext, cipher.iv)
     }
 
     fun decryptWithRootKey(encryptedData: EncryptedData, aad: ByteArray? = null): ByteArray {
         return decryptWithKey(encryptedData, getRootKey(), aad)
     }
 }
-
-data class EncryptedData(
-    val cipherText: ByteArray,
-    val iv: ByteArray
-)

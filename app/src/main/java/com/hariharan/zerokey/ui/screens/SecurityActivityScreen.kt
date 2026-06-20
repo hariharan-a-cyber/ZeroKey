@@ -96,7 +96,7 @@ fun SecurityActivityScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     items(logs) { log ->
-                        PremiumLogItem(log)
+                        PremiumLogItem(log, viewModel)
                     }
                 }
             }
@@ -105,7 +105,7 @@ fun SecurityActivityScreen(
 }
 
 @Composable
-fun PremiumLogItem(log: AuditLogEntity) {
+fun PremiumLogItem(log: AuditLogEntity, viewModel: PasswordViewModel) {
     val sdf = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
     val dateString = sdf.format(Date(log.timestamp))
 
@@ -156,7 +156,7 @@ fun PremiumLogItem(log: AuditLogEntity) {
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = log.details,
+                    text = viewModel.decryptLogDetails(log.details),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -25,6 +25,9 @@ class PasswordItem(
     private val initialNotes: String? = null,
     val isFavorite: Boolean = false,
     val createdAt: Long = encryptedEntity?.createdAt ?: System.currentTimeMillis(),
+    val lastModified: Long = encryptedEntity?.lastModified ?: System.currentTimeMillis(),
+    val lastBreachCheck: Long = encryptedEntity?.lastBreachCheck ?: 0L,
+    val breachFound: Boolean = encryptedEntity?.breachFound ?: false,
     @Transient
     private val masterPasswordManager: MasterPasswordManager? = null,
     @Transient
@@ -90,15 +93,11 @@ class PasswordItem(
             ?: return ByteArray(0)
         
         val version = encryptedEntity.encryptionVersion
-        val recordUid = encryptedEntity.recordUid
+        val recordUid = encryptedEntity.recordUid ?: ""
         val createdAt = encryptedEntity.createdAt
         val sVersion = encryptedEntity.schemaVersion
 
-        val aad = when {
-            sVersion >= 6 -> "v$version|s$sVersion|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
-            version >= 1 -> "v$version|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
-            else -> "timestamp:$createdAt".toByteArray(Charsets.UTF_8)
-        }
+        val aad = "v$version|s$sVersion|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
 
         val data = EncryptedData(
             Base64.decode(encryptedEntity.encryptedPassword, Base64.NO_WRAP), 
@@ -142,15 +141,11 @@ class PasswordItem(
         val vaultKey = masterPasswordManager?.getVaultKey() 
             ?: return "[Vault Locked]"
         
-        val version = encryptedEntity?.encryptionVersion ?: 0
+        val version = encryptedEntity?.encryptionVersion ?: 1
         val recordUid = encryptedEntity?.recordUid ?: ""
-        val sVersion = encryptedEntity?.schemaVersion ?: 0
+        val sVersion = encryptedEntity?.schemaVersion ?: 6
         
-        val aad = when {
-            sVersion >= 6 -> "v$version|s$sVersion|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
-            version >= 1 -> "v$version|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
-            else -> "timestamp:$createdAt".toByteArray(Charsets.UTF_8)
-        }
+        val aad = "v$version|s$sVersion|$recordUid|$createdAt".toByteArray(Charsets.UTF_8)
 
         val data = EncryptedData(Base64.decode(ciphertext, Base64.NO_WRAP), Base64.decode(iv, Base64.NO_WRAP))
         

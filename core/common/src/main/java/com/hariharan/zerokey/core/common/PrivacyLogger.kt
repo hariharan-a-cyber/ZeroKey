@@ -92,13 +92,21 @@ object PrivacyLogger {
     /**
      * Sanitize a message to remove potentially sensitive data (Emails, IPs, IDs).
      */
-    fun sanitizeError(msg: String?): String {
-        if (msg == null) return "null"
-        return msg.replace(Regex("[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,4}"), "masked_domain")
-                  .replace(Regex("/[a-zA-Z0-9._/-]+"), "/masked_path")
-                  .replace(Regex("[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]+"), "masked_email")
-                  .replace(Regex("\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"), "masked_ip")
-                  .replace(Regex("\\b[a-zA-Z0-9]{20,}\\b"), "masked_id") // Potential UIDs or Tokens
+    fun sanitizeError(message: String?): String {
+        if (message == null) return "null"
+        var sanitized = message
+        // Mask realistic hostnames (require word boundary + dot + TLD-shaped suffix).
+        sanitized = sanitized.replace(
+            Regex("\\b[a-zA-Z0-9][a-zA-Z0-9-]{0,62}\\.[a-zA-Z]{2,24}\\b"),
+            "masked_domain"
+        )
+        // Mask very long opaque tokens (32+ chars). Raised from 20 so plain UUIDs
+        // and simple identifiers aren't masked.
+        sanitized = sanitized.replace(
+            Regex("\\b[A-Za-z0-9+/]{32,}={0,2}\\b"),
+            "masked_token"
+        )
+        return sanitized
     }
 
     /**

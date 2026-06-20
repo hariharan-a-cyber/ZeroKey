@@ -34,6 +34,29 @@ fun CredentialSharingScreen(
     userId: String
 ) {
     var recipientId by remember { mutableStateOf("") }
+    var recipientFingerprint by remember { mutableStateOf<String?>(null) }
+    var fingerprintLookupError by remember { mutableStateOf<String?>(null) }
+    var showConfirmShare by remember { mutableStateOf(false) }
+
+    // Look up the recipient's public-key fingerprint as soon as a plausible
+    // UID is typed. The user must verify it out-of-band before confirming.
+    LaunchedEffect(recipientId) {
+        recipientFingerprint = null
+        fingerprintLookupError = null
+        val trimmed = recipientId.trim()
+        if (trimmed.length >= 20) {
+            try {
+                val fp = viewModel.fetchRecipientFingerprint(trimmed)
+                if (fp != null) {
+                    recipientFingerprint = fp
+                } else {
+                    fingerprintLookupError = "No ZeroKey user with this ID."
+                }
+            } catch (e: Exception) {
+                fingerprintLookupError = "Lookup failed: check your connection."
+            }
+        }
+    }
     var selectedCredentialId by remember { mutableStateOf<Int?>(null) }
     var showCredentialPicker by remember { mutableStateOf(false) }
     
@@ -147,6 +170,41 @@ fun CredentialSharingScreen(
                     leadingIcon = { Icon(Icons.Default.PersonAdd, null) }
                 )
 
+                recipientFingerprint?.let { fp ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                "Recipient key fingerprint:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                fp,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                            Text(
+                                "Verify this matches what the recipient sees in their app before sending.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+                fingerprintLookupError?.let { err ->
+                    Text(
+                        err,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+
                 OutlinedButton(
                     onClick = { showCredentialPicker = true },
                     modifier = Modifier
@@ -196,17 +254,7 @@ fun CredentialSharingScreen(
                 }
 
                 Button(
-                    onClick = {
-                        selectedCredentialId?.let { id ->
-                            viewModel.shareCredential(userId, recipientId, id) { ok, msg ->
-                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                if (ok) {
-                                    recipientId = ""
-                                    selectedCredentialId = null
-                                }
-                            }
-                        }
-                    },
+                    onClick = { showConfirmShare = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
@@ -216,7 +264,9 @@ fun CredentialSharingScreen(
                         containerColor = MaterialTheme.colorScheme.onSurface,
                         contentColor = MaterialTheme.colorScheme.surface
                     ),
-                    enabled = recipientId.isNotBlank() && selectedCredentialId != null
+                    enabled = recipientId.isNotBlank() &&
+                        selectedCredentialId != null &&
+                        recipientFingerprint != null
                 ) {
                     Icon(Icons.Default.Share, null)
                     Spacer(Modifier.width(8.dp))
@@ -224,6 +274,49 @@ fun CredentialSharingScreen(
                 }
             }
         }
+    }
+
+    if (showConfirmShare) {
+        AlertDialog(
+            onDismissRequest = { showConfirmShare = false },
+            icon = { Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Confirm Sharing") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("You're about to share this credential with a recipient whose key fingerprint is:")
+                    Text(
+                        recipientFingerprint ?: "",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Text(
+                        "Verify this matches the recipient before you proceed. If it doesn't match, the share will be encrypted to the wrong person.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showConfirmShare = false
+                    selectedCredentialId?.let { id ->
+                        viewModel.shareCredential(userId, recipientId.trim(), id) { ok, msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            if (ok) {
+                                recipientId = ""
+                                selectedCredentialId = null
+                                recipientFingerprint = null
+                            }
+                        }
+                    }
+                }) { Text("Yes, send") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmShare = false }) { Text("Cancel") }
+            }
+        )
     }
 
     if (showCredentialPicker) {

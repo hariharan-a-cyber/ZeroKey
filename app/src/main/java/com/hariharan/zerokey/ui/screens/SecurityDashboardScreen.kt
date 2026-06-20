@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.core.crypto.EncryptionManager
+import com.hariharan.zerokey.core.crypto.KeySecurityLevel
 import com.hariharan.zerokey.security.SecurityHardening
 import com.hariharan.zerokey.securityanalytics.*
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
@@ -173,19 +174,19 @@ private fun HardwareSecurityCard(viewModel: PasswordViewModel) {
     val securityLevel = remember { viewModel.keySecurityLevel }
     
     val (label, description, color, icon) = when (securityLevel) {
-        EncryptionManager.KeySecurityLevel.STRONGBOX -> Triple(
+        KeySecurityLevel.STRONGBOX -> Triple(
             "StrongBox Verified",
             "Maximum Security: Root key is protected by a dedicated hardware secure element.",
             Color(0xFF4CAF50)
         ).let { it.copy(fourth = Icons.Default.Shield) }
         
-        EncryptionManager.KeySecurityLevel.TEE -> Triple(
+        KeySecurityLevel.TEE -> Triple(
             "TEE Verified",
             "High Security: Root key is stored in a Trusted Execution Environment (isolated from Android).",
             Color(0xFF2196F3)
         ).let { it.copy(fourth = Icons.Default.Security) }
         
-        EncryptionManager.KeySecurityLevel.SOFTWARE -> Triple(
+        KeySecurityLevel.SOFTWARE -> Triple(
             "Software Emulated",
             "Limited Security: No secure hardware detected for root key. Rooted devices are at risk.",
             Color(0xFFE74C3C)

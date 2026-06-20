@@ -1,5 +1,4 @@
 {
-  "dependencies": {
-    "nodemailer": "^9.0.0"
-  }
+  "private": true,
+  "description": "ZeroKey repository root — no runtime JS dependencies."
 }

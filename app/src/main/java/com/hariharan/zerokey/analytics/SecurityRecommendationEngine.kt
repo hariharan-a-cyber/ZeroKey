@@ -1,6 +1,6 @@
 package com.hariharan.zerokey.analytics
 
-import com.hariharan.zerokey.utils.PasswordHealthAnalyzer
+import com.hariharan.zerokey.utils.HealthReport
 
 /**
  * Generates actionable security recommendations based on vault analysis.
@@ -16,7 +16,7 @@ object SecurityRecommendationEngine {
 
     enum class Priority { LOW, MEDIUM, HIGH, CRITICAL }
 
-    fun getRecommendations(report: PasswordHealthAnalyzer.HealthReport): List<Recommendation> {
+    fun getRecommendations(report: HealthReport): List<Recommendation> {
         val list = mutableListOf<Recommendation>()
         if (report.compromisedPasswords.isNotEmpty()) list.add(Recommendation.CompromisedPasswords)
         if (report.duplicatePasswords.isNotEmpty()) list.add(Recommendation.ReusedPasswords)

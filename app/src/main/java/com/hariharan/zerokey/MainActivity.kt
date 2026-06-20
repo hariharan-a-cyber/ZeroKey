@@ -47,7 +47,7 @@ import com.hariharan.zerokey.core.security.*
 import com.hariharan.zerokey.core.crypto.*
 import com.hariharan.zerokey.sync.*
 import com.hariharan.zerokey.sharing.*
-import com.hariharan.zerokey.emergency.*
+
 import com.hariharan.zerokey.ui.screens.*
 import com.hariharan.zerokey.ui.theme.ZeroKeyTheme
 import com.hariharan.zerokey.viewmodel.PasswordViewModel
@@ -121,13 +121,29 @@ class MainActivity : FragmentActivity() {
                 }
 
                 // Security Hardening: Check device integrity
-                val securityStatus = remember { SecurityHardening.checkDeviceSecurity(context) }
+                // Re-run on every resume. The previous `remember { ... }` froze the
+                // result at first composition — a Frida attach (or root toggle) after
+                // first launch was invisible to the security warning.
+                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                var securityStatus by remember {
+                    mutableStateOf(SecurityHardening.checkDeviceSecurity(context))
+                }
+                DisposableEffect(lifecycleOwner) {
+                    val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+                        if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                            securityStatus = SecurityHardening.checkDeviceSecurity(context)
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(obs)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                }
+
                 val keySecurity = remember { encryptionManager.getKeySecurityLevel() }
                 
                 var showSecurityWarning by remember { 
                     mutableStateOf(securityStatus.isCompromised || 
                                    securityStatus.accessibilityRisk == SecurityHardening.RiskLevel.HIGH ||
-                                   keySecurity == EncryptionManager.KeySecurityLevel.SOFTWARE) 
+                                   keySecurity == KeySecurityLevel.SOFTWARE) 
                 }
 
                 if (showSecurityWarning) {
@@ -145,7 +161,7 @@ class MainActivity : FragmentActivity() {
                             if (securityStatus.accessibilityRisk == SecurityHardening.RiskLevel.HIGH) {
                                 message.append("• Screen is being watched.\n")
                             }
-                            if (keySecurity == EncryptionManager.KeySecurityLevel.SOFTWARE) {
+                            if (keySecurity == KeySecurityLevel.SOFTWARE) {
                                 message.append("• No secure storage chip.\n")
                             }
                             
@@ -203,7 +219,9 @@ class MainActivity : FragmentActivity() {
         if (clipboard.hasPrimaryClip()) {
             val description = clipboard.primaryClipDescription
             val label = description?.label?.toString() ?: ""
-            if (label == "password" || label == "generated_password" || label == "ZeroKey_Password" || label.contains("password", ignoreCase = true)) {
+        if (label.equals(com.hariharan.zerokey.utils.SecureClipboard.CLIP_LABEL, ignoreCase = true) ||
+            label.contains("password", ignoreCase = true) ||
+            label.contains("zerokey", ignoreCase = true)) {
                 val clip = ClipData.newPlainText("", "")
                 clipboard.setPrimaryClip(clip)
             }
