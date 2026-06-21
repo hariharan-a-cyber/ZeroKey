@@ -12,18 +12,21 @@ data class EncryptedVaultBlob(
     val vaultEpochId: String = "",
     val previousSnapshotHmac: String? = null
 ) {
-    fun toMap(): Map<String, Any?> = mapOf(
-        "deviceId" to deviceId,
-        "vaultVersion" to vaultVersion,
-        "encryptedVault" to encryptedVault,
-        "iv" to iv,
-        "hmac" to hmac,
-        "timestamp" to timestamp,
-        "wrappedVaultKey" to wrappedVaultKey,
-        "wrappedVaultKeyIv" to wrappedVaultKeyIv,
-        "vaultEpochId" to vaultEpochId,
-        "previousSnapshotHmac" to previousSnapshotHmac
-    )
+    fun toMap(): Map<String, Any?> {
+        val map = mutableMapOf<String, Any?>(
+            "deviceId" to deviceId,
+            "vaultVersion" to vaultVersion,
+            "encryptedVault" to encryptedVault,
+            "iv" to iv,
+            "hmac" to hmac,
+            "timestamp" to timestamp,
+            "vaultEpochId" to vaultEpochId
+        )
+        wrappedVaultKey?.let { map["wrappedVaultKey"] = it }
+        wrappedVaultKeyIv?.let { map["wrappedVaultKeyIv"] = it }
+        previousSnapshotHmac?.let { map["previousSnapshotHmac"] = it }
+        return map
+    }
 
     companion object {
         fun fromMap(map: Map<String, Any>): EncryptedVaultBlob = EncryptedVaultBlob(

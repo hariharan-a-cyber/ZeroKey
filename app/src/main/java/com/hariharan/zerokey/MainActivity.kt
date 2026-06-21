@@ -109,16 +109,14 @@ class MainActivity : FragmentActivity() {
                 val user by authenticator.userState.collectAsState()
                 val isAuthenticated = user != null
 
-                // Use a key-based state that we can refresh on resume
-                var vaultCheckKey by remember { mutableStateOf(0) }
-                val isVaultUnlocked = remember(vaultCheckKey, user?.uid) { masterPasswordManager.isUnlocked() }
+                // Security Hardening: Reactive Vault Lock Status
+                val isVaultUnlocked by masterPasswordManager.isUnlockedFlow.collectAsState()
                 
                 val onSignOut = {
                     scope.launch {
                         biometricVaultUnlockManager.clear()
                         masterPasswordManager.lockVault() // CRITICAL: Clear keys on sign out
                         authenticator.signOut(context)
-                        vaultCheckKey++
                     }
                     Unit
                 }
@@ -196,11 +194,10 @@ class MainActivity : FragmentActivity() {
                                     authenticator.uid?.let { deviceTrustManager.registerCurrentDevice(it) }
                                 } catch (_: Exception) { /* offline is fine; not required to unlock */ }
                             }
-                            vaultCheckKey++
                         }
                     )
                 } else {
-                    VaultContent(authAttemptManager, authenticator, onSignOut, onRefreshVault = { vaultCheckKey++ })
+                    VaultContent(authAttemptManager, authenticator, onSignOut)
                 }
             }
         }
@@ -234,8 +231,7 @@ class MainActivity : FragmentActivity() {
     fun VaultContent(
         authAttemptManager: AuthAttemptManager, 
         authenticator: FirebaseAuthenticator, 
-        onSignOut: () -> Unit,
-        onRefreshVault: () -> Unit
+        onSignOut: () -> Unit
     ) {
         val viewModel: PasswordViewModel = hiltViewModel()
         val syncViewModel: SyncViewModel = hiltViewModel()
@@ -258,7 +254,6 @@ class MainActivity : FragmentActivity() {
                                     masterPasswordManager.lockVault()
                                     viewModel.lockVault()
                                 }
-                                onRefreshVault()
                             }
                             Lifecycle.Event.ON_RESUME -> {
                                 // Check if grace period expired while backgrounded
@@ -276,7 +271,6 @@ class MainActivity : FragmentActivity() {
                                         withContext(Dispatchers.Main) {
                                             masterPasswordManager.lockVault()
                                             viewModel.lockVault()
-                                            onRefreshVault()
                                             Toast.makeText(applicationContext, "Access Revoked: This device is no longer trusted.", Toast.LENGTH_LONG).show()
                                         }
                                     }

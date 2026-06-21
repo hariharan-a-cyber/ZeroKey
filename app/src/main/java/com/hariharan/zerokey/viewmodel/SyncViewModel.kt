@@ -51,8 +51,13 @@ class SyncViewModel @Inject constructor(
 
             val vaultKey = masterPasswordManager.getVaultKey()
             if (vaultKey == null) {
+                PrivacyLogger.w("SyncViewModel", "Sync attempted but vaultKey is NULL.")
                 _syncState.value = SyncStatus.Error("Vault must be unlocked first.")
                 return@launch
+            }
+
+            if (!masterPasswordManager.isFullUnlock()) {
+                PrivacyLogger.i("SyncViewModel", "Partial unlock detected (Biometric). Proceeding with vault update only.")
             }
 
             val encKeyBytes = hmacEngine.deriveSubKey(vaultKey.encoded, "zk-enc-v1")

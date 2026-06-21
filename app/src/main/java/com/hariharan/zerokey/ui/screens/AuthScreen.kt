@@ -110,9 +110,9 @@ fun AuthScreen(
             if (activity != null) {
                 biometricUnlockManager.unlock(activity) { rawKey ->
                     if (rawKey != null) {
-                        masterPasswordManager.restoreVaultKey(rawKey)
-                        java.util.Arrays.fill(rawKey, 0)
                         val uid = currentUser?.uid ?: "unknown"
+                        masterPasswordManager.restoreVaultKey(rawKey, uid)
+                        java.util.Arrays.fill(rawKey, 0)
                         authAttemptManager.resetAttempts(uid)
                         onAuthSuccess()
                     }

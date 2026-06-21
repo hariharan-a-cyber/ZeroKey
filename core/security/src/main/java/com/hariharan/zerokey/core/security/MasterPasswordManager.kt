@@ -8,6 +8,9 @@ import com.hariharan.zerokey.core.common.SensitiveDataManager
 import com.hariharan.zerokey.core.crypto.EncryptedData
 import com.hariharan.zerokey.core.crypto.EncryptionManager
 import com.hariharan.zerokey.core.crypto.KeyDerivationManager
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.security.SecureRandom
 import javax.crypto.spec.SecretKeySpec
 import javax.inject.Inject
@@ -39,7 +42,7 @@ class MasterPasswordManager @Inject constructor(
         private const val KEY_RECOVERY_IV = "recovery_iv"
         private const val KEY_IDENTITY_PUB = "identity_public_key"
         private const val DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS = 60_000L // 60 seconds
-        private const val DEFAULT_LOCK_GRACE_PERIOD_MS = 0L // Immediately
+        private const val DEFAULT_LOCK_GRACE_PERIOD_MS = 15_000L // 15 seconds (Safety Buffer)
     }
 
     fun getIdentityPublicKey(context: Context, userId: String): String? {
@@ -90,6 +93,9 @@ class MasterPasswordManager @Inject constructor(
     
     @Volatile
     private var vaultKey: SecretKeySpec? = null
+
+    private val _isUnlocked = MutableStateFlow(false)
+    val isUnlockedFlow: StateFlow<Boolean> = _isUnlocked.asStateFlow()
 
     @Volatile
     private var lastUnlockTimestamp: Long = 0
@@ -197,6 +203,7 @@ class MasterPasswordManager @Inject constructor(
         // Store in memory for immediate use
         masterKey = derivedMasterKey
         vaultKey = newVaultKey
+        _isUnlocked.value = true
         lastUnlockTimestamp = System.currentTimeMillis()
         
         SensitiveDataManager.clearSensitiveData(password)
@@ -228,6 +235,7 @@ class MasterPasswordManager @Inject constructor(
         
         masterKey = derivedMasterKey
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        _isUnlocked.value = true
         lastUnlockTimestamp = System.currentTimeMillis()
         
         SensitiveDataManager.clearSensitiveData(password)
@@ -261,8 +269,10 @@ class MasterPasswordManager @Inject constructor(
      * Sets the vault key in memory ONLY (no persistence), e.g. after a biometric unlock.
      * The hardened on-disk wrapped vault key is unchanged.
      */
-    fun restoreVaultKey(rawVaultKey: ByteArray) {
+    fun restoreVaultKey(rawVaultKey: ByteArray, userId: String? = null) {
+        userId?.let { currentUserId = it }
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        _isUnlocked.value = true
         lastUnlockTimestamp = System.currentTimeMillis()
     }
 
@@ -497,12 +507,20 @@ class MasterPasswordManager @Inject constructor(
     }
 
     fun lockVault() {
+        com.hariharan.zerokey.core.common.PrivacyLogger.i("MasterPasswordManager", "Vault Locked.")
         masterKey = null
         vaultKey = null
+        _isUnlocked.value = false
         lastUnlockTimestamp = 0
     }
 
     fun isUnlocked(): Boolean = vaultKey != null
+    
+    /**
+     * Returns true if the vault is unlocked AND the master key (derived from password) 
+     * is in memory. Biometric unlock only provides the vault key, so this will be false.
+     */
+    fun isFullUnlock(): Boolean = vaultKey != null && masterKey != null
 
     /**
      * Checks if the vault is unlocked AND the recent authentication is still valid.
