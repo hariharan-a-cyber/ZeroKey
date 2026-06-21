@@ -97,6 +97,9 @@ class MasterPasswordManager @Inject constructor(
     private val _isUnlocked = MutableStateFlow(false)
     val isUnlockedFlow: StateFlow<Boolean> = _isUnlocked.asStateFlow()
 
+    private val _isFullUnlock = MutableStateFlow(false)
+    val isFullUnlockFlow: StateFlow<Boolean> = _isFullUnlock.asStateFlow()
+
     @Volatile
     private var lastUnlockTimestamp: Long = 0
 
@@ -204,6 +207,7 @@ class MasterPasswordManager @Inject constructor(
         masterKey = derivedMasterKey
         vaultKey = newVaultKey
         _isUnlocked.value = true
+        _isFullUnlock.value = true
         lastUnlockTimestamp = System.currentTimeMillis()
         
         SensitiveDataManager.clearSensitiveData(password)
@@ -236,6 +240,7 @@ class MasterPasswordManager @Inject constructor(
         masterKey = derivedMasterKey
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
         _isUnlocked.value = true
+        _isFullUnlock.value = true
         lastUnlockTimestamp = System.currentTimeMillis()
         
         SensitiveDataManager.clearSensitiveData(password)
@@ -273,6 +278,7 @@ class MasterPasswordManager @Inject constructor(
         userId?.let { currentUserId = it }
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
         _isUnlocked.value = true
+        _isFullUnlock.value = false
         lastUnlockTimestamp = System.currentTimeMillis()
     }
 
@@ -304,25 +310,46 @@ class MasterPasswordManager @Inject constructor(
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
     }
 
+    fun deriveMasterKey(password: CharArray, salt: ByteArray, version: Int): SecretKeySpec {
+        return keyDerivationManager.deriveKey(password, salt, version)
+    }
+
     /**
      * Imports a vault key from the cloud by unwrapping it with the master key.
      * Then hardens it with the hardware key and saves it locally.
+     * Used by Restore Flow (new device) and Sync Flow.
      */
-    fun importVaultKey(context: Context, wrappedKey: EncryptedData) {
+    fun importVaultKey(
+        context: Context, 
+        wrappedKey: EncryptedData, 
+        providedMasterKey: SecretKeySpec? = null, 
+        providedSalt: ByteArray? = null
+    ) {
         val uid = currentUserId ?: throw IllegalStateException("User ID unknown")
-        val currentMasterKey = masterKey ?: throw IllegalStateException("Vault is locked")
+        
+        // SECURITY: We need a master key to unwrap the vault key.
+        // ProvidedMasterKey is used when restoring on a new device.
+        val mKey = providedMasterKey ?: masterKey ?: throw IllegalStateException("Master key unavailable")
+        
+        // If salt was provided, persist it locally.
+        providedSalt?.let { saveSalt(context, it, uid) }
         
         // 1. Unwrap with Master Key
-        val rawVaultKey = encryptionManager.decryptWithKey(wrappedKey, currentMasterKey)
+        val rawVaultKey = encryptionManager.decryptWithKey(wrappedKey, mKey)
         
         // 2. Wrap with hardware-backed Root Key
-        val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, currentMasterKey)
+        val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, mKey)
         val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
         
         saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted, uid)
         
-        // 3. Update in memory
+        // 3. Update state
+        masterKey = mKey
         vaultKey = SecretKeySpec(rawVaultKey, "AES")
+        _isUnlocked.value = true
+        _isFullUnlock.value = true
+        lastUnlockTimestamp = System.currentTimeMillis()
+
         rawVaultKey.fill(0)
     }
 
@@ -511,6 +538,7 @@ class MasterPasswordManager @Inject constructor(
         masterKey = null
         vaultKey = null
         _isUnlocked.value = false
+        _isFullUnlock.value = false
         lastUnlockTimestamp = 0
     }
 
@@ -576,7 +604,7 @@ class MasterPasswordManager @Inject constructor(
         }
     }
 
-    private fun saveSalt(context: Context, salt: ByteArray, userId: String) {
+    fun saveSalt(context: Context, salt: ByteArray, userId: String) {
         getPrefs(context, userId).edit().putString(KEY_SALT, Base64.encodeToString(salt, Base64.NO_WRAP)).apply()
     }
 

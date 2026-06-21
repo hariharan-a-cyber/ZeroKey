@@ -55,6 +55,8 @@ fun AuthScreen(
     
     var isRestoringSession by remember { mutableStateOf(false) }
     var isSetupRequired by remember { mutableStateOf(false) }
+    var hasRemoteVault by remember { mutableStateOf(false) }
+    var remoteVaultBlob by remember { mutableStateOf<com.hariharan.zerokey.sync.EncryptedVaultBlob?>(null) }
     
     var showRecovery by remember { mutableStateOf(false) }
     val canBiometric = remember { biometricUnlockManager.isEnrolled() && biometricUnlockManager.isSupported() }
@@ -94,12 +96,31 @@ fun AuthScreen(
                 isSetupRequired = false
                 if (canBiometric) useBiometric = true
             } else {
-                isRestoringSession = false
-                isSetupRequired = true
+                // Check if user has a vault in the cloud
+                isLoading = true
+                try {
+                    val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                        .collection("encrypted_vault_snapshots")
+                        .document(uid).get().await()
+                    if (doc.exists()) {
+                        remoteVaultBlob = com.hariharan.zerokey.sync.EncryptedVaultBlob.fromMap(doc.data!!)
+                        hasRemoteVault = true
+                        isRestoringSession = true
+                        isSetupRequired = false
+                    } else {
+                        isRestoringSession = false
+                        isSetupRequired = true
+                    }
+                } catch (_: Exception) {
+                    isRestoringSession = false
+                    isSetupRequired = true
+                }
+                isLoading = false
             }
         } else if (!isFirebaseAuthenticated) {
             isRestoringSession = false
             isSetupRequired = false
+            hasRemoteVault = false
         }
     }
 
@@ -156,6 +177,7 @@ fun AuthScreen(
             Text(
                 text = when {
                     isRestoringSession && useBiometric -> "Unlock with biometrics to open your vault."
+                    isRestoringSession && hasRemoteVault -> "Vault found in cloud. Enter your master password to restore it to this device."
                     isRestoringSession -> "Enter your master password to unlock your vault."
                     isSetupRequired -> "One last step: Create your Master Password. This password encrypts your vault and is never sent to us."
                     else -> "The invisible vault for your digital life."
@@ -240,7 +262,43 @@ fun AuthScreen(
                             try {
                                 val currentUid = currentUser?.uid ?: throw IllegalStateException("User not logged in")
                                 masterPasswordManager.setUserId(currentUid)
-                                if (!masterPasswordManager.isSetup(context, currentUid)) {
+                                
+                                if (hasRemoteVault && remoteVaultBlob != null) {
+                                    // RESTORE FLOW
+                                    val blob = remoteVaultBlob!!
+                                    if (blob.wrappedVaultKey == null || blob.wrappedVaultKeyIv == null) {
+                                        throw IllegalStateException("Cloud vault is missing recovery key. Use a recovery code instead.")
+                                    }
+                                    
+                                    PrivacyLogger.i("AuthScreen", "Restoring vault from cloud...")
+                                    val wrapped = com.hariharan.zerokey.core.crypto.EncryptedData(
+                                        android.util.Base64.decode(blob.wrappedVaultKey, android.util.Base64.NO_WRAP),
+                                        android.util.Base64.decode(blob.wrappedVaultKeyIv, android.util.Base64.NO_WRAP)
+                                    )
+                                    
+                                    // Set salt locally first (needed for key derivation)
+                                    // (Assuming salt is available in users/uid doc or we need to fetch it)
+                                    // Wait, the SyncBlob doesn't have the salt. The salt is in the users/UID doc.
+                                    val userDoc = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                                        .collection("users").document(currentUid).get().await()
+                                    val saltB64 = userDoc.getString("vault_salt") 
+                                        ?: throw IllegalStateException("Cloud vault metadata (salt) missing.")
+                                    
+                                    val salt = android.util.Base64.decode(saltB64, android.util.Base64.NO_WRAP)
+                                    // Manually save salt locally as masterPasswordManager expects it on disk
+                                    val prefs = context.getSharedPreferences("master_password_prefs_" + android.util.Base64.encodeToString(currentUid.toByteArray(), android.util.Base64.NO_WRAP), android.content.Context.MODE_PRIVATE)
+                                    // Actually masterPasswordManager has internal saveSalt but it's private.
+                                    // Let's use a public way if possible or just unwrap then import.
+                                    
+                                    // 1. Derive master key from password
+                                    val derivedKey = masterPasswordManager.deriveMasterKey(
+                                        password.toCharArray(), salt, userDoc.getLong("crypto_version")?.toInt() ?: 1
+                                    )
+                                    
+                                    // 2. Import into manager
+                                    masterPasswordManager.importVaultKey(context, wrapped, derivedKey, salt)
+                                    PrivacyLogger.i("AuthScreen", "Vault restored successfully.")
+                                } else if (!masterPasswordManager.isSetup(context, currentUid)) {
                                     PrivacyLogger.i("AuthScreen", "Setting up new vault...")
                                     masterPasswordManager.setupVault(context, password.toCharArray(), currentUid)
                                 } else {

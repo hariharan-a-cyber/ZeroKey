@@ -51,8 +51,9 @@ class SyncViewModel @Inject constructor(
 
             val vaultKey = masterPasswordManager.getVaultKey()
             if (vaultKey == null) {
-                PrivacyLogger.w("SyncViewModel", "Sync attempted but vaultKey is NULL.")
-                _syncState.value = SyncStatus.Error("Vault must be unlocked first.")
+                val message = if (masterPasswordManager.isUnlocked()) "Session integrity error. Please lock and unlock." 
+                              else "Vault locked due to inactivity. Please unlock to sync."
+                _syncState.value = SyncStatus.Error(message)
                 return@launch
             }
 
@@ -119,22 +120,47 @@ class SyncViewModel @Inject constructor(
                 val entities = repository.getAllEntities()
                 val mergedJson = Json.encodeToString(ListSerializer(PasswordEntity.serializer()), entities)
                 
+                // SECURITY: Only update the wrapped vault key if we have the master key in memory
+                // (Full Unlock). If on biometric, masterPasswordManager.getWrappedVaultKey() 
+                // returns null, which our SyncModels.toMap() handles by OMITTING the field,
+                // thus preserving the existing one in Firestore via SetOptions.merge().
+                val wrappedKey = masterPasswordManager.getWrappedVaultKey()
+                if (wrappedKey == null && masterPasswordManager.isUnlocked()) {
+                    PrivacyLogger.i("SyncViewModel", "Biometric session: preserving existing server-side recovery wrapper.")
+                }
+
                 val pushResult = syncManager.pushVaultSnapshot(
                     userId = userId,
                     plaintextVaultJson = mergedJson,
                     encryptionKey = encKeyBytes,
                     hmacKey = macKeyBytes,
-                    wrappedKey = masterPasswordManager.getWrappedVaultKey(),
+                    wrappedKey = wrappedKey,
                     vaultEpochId = repository.getVaultEpochId(),
                     previousSnapshotHmac = repository.getLastKnownHmac()
                 )
 
-                when (pushResult) {
-                    is SyncResult.Success -> {
-                        repository.updateVaultVersion(pushResult.version, pushResult.snapshotHmac)
-                        _syncState.value = SyncStatus.Success(System.currentTimeMillis())
+                if (pushResult is SyncResult.Success) {
+                    repository.updateVaultVersion(pushResult.version, pushResult.snapshotHmac)
+                    
+                    // Proactive Check: Ensure cloud has the master key wrapper and salt
+                    // This allows new devices to restore the vault using just the password.
+                    if (masterPasswordManager.isFullUnlock()) {
+                        val salt = masterPasswordManager.getSalt(getApplication())
+                        if (salt != null) {
+                            com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                                .collection("users").document(userId).set(
+                                    mapOf(
+                                        "vault_salt" to android.util.Base64.encodeToString(salt, android.util.Base64.NO_WRAP),
+                                        "crypto_version" to masterPasswordManager.getCryptoVersion(getApplication(), userId)
+                                    ),
+                                    com.google.firebase.firestore.SetOptions.merge()
+                                )
+                        }
                     }
-                    is SyncResult.Failure -> _syncState.value = SyncStatus.Error(pushResult.reason)
+                    
+                    _syncState.value = SyncStatus.Success(System.currentTimeMillis())
+                } else {
+                    handleSyncFailure((pushResult as SyncResult.Failure).reason)
                 }
             } catch (e: Exception) {
                 PrivacyLogger.e("SyncViewModel", "Sync failed: ${PrivacyLogger.sanitizeError(e.message)}")
