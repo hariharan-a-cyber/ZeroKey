@@ -64,6 +64,8 @@ fun CredentialSharingScreen(
     val context = LocalContext.current
     val surfaceColor = MaterialTheme.colorScheme.surface
 
+    val ownFingerprint = remember { viewModel.getOwnSharingFingerprint(context) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -150,6 +152,21 @@ fun CredentialSharingScreen(
                                 Icon(Icons.Default.ContentCopy, contentDescription = "Copy ID", modifier = Modifier.size(20.dp))
                             }
                         }
+                        
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "My Key Fingerprint:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = ownFingerprint,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
 

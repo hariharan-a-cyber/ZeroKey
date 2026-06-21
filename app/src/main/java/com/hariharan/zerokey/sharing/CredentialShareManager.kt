@@ -62,6 +62,22 @@ class CredentialShareManager @Inject constructor(
     }
 
     /**
+     * Returns a short human-comparable fingerprint of the user's own public key.
+     */
+    fun getOwnFingerprint(context: Context): String {
+        return try {
+            val privateHandle = getPrivateKeysetHandle(context)
+            val out = ByteArrayOutputStream()
+            privateHandle.publicKeysetHandle.writeNoSecret(BinaryKeysetWriter.withOutputStream(out))
+            val keyBytes = out.toByteArray()
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(keyBytes)
+            digest.copyOfRange(0, 8).joinToString(":") { "%02X".format(it) }
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+
+    /**
      * Returns a short human-comparable fingerprint of the recipient's public key
      * (first 8 bytes of SHA-256, colon-separated hex). The sender displays this
      * and the recipient confirms it OUT-OF-BAND before any share is sent. This

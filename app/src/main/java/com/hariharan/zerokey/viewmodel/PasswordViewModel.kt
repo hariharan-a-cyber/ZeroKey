@@ -598,5 +598,9 @@ class PasswordViewModel @Inject constructor(
         }
     }
 
+    fun getOwnSharingFingerprint(context: Context): String {
+        return shareManager?.getOwnFingerprint(context) ?: "Unavailable"
+    }
+
     fun decryptLogDetails(stored: String): String = auditLogManager.decryptDetails(stored)
 }
