@@ -87,6 +87,9 @@ class SyncViewModel @Inject constructor(
                         val mergedEntities = Json.decodeFromString(ListSerializer(PasswordEntity.serializer()), pullResult.plaintextVault)
                         repository.syncWithRemote(mergedEntities)
                         repository.setVaultEpochId(pullResult.epochId)
+                        // CRITICAL: Update local metadata with remote values after pull
+                        // to ensure the next push references the correct previous state.
+                        repository.updateVaultVersion(pullResult.version, pullResult.snapshotHmac)
                     }
                     is PullResult.NoRemoteVault -> {
                         // First-time sync — nothing to pull. Just push.
