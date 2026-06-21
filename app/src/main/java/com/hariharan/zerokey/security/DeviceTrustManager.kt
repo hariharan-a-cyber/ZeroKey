@@ -76,6 +76,12 @@ class DeviceTrustManager @Inject constructor(
                 .collection("devices").document(deviceId)
                 .set(doc)
                 .await()
+            
+            // SECURITY: Mark trust as fresh locally so we don't immediately lock 
+            // the vault on the next resume check.
+            prefs.edit()
+                .putLong(lastSuccessfulCheckKey(userId), System.currentTimeMillis())
+                .apply()
         } catch (e: Exception) {
             PrivacyLogger.e("DeviceTrustManager", "Device registration failed: ${e.message}")
         }
@@ -83,12 +89,6 @@ class DeviceTrustManager @Inject constructor(
 
     /**
      * Returns true if this device should be considered untrusted right now.
-     *
-     *  - Firestore says trusted=false  → revoked.
-     *  - Firestore says trusted=true   → trusted; update last-success timestamp.
-     *  - Network error: if we have a recent successful check (within TTL), keep
-     *    trust; otherwise lock the vault so an attacker who throttles the network
-     *    can't keep a revoked device alive forever.
      */
     suspend fun isCurrentDeviceRevoked(userId: String): Boolean {
         return try {
@@ -96,6 +96,9 @@ class DeviceTrustManager @Inject constructor(
                 .collection("devices").document(deviceId)
                 .get()
                 .await()
+            
+            // If the document doesn't exist, we haven't registered yet.
+            // Don't treat as revoked unless we see an explicit trusted=false.
             val revoked = doc.exists() && (doc.getBoolean("trusted") == false)
             if (!revoked) {
                 prefs.edit()
@@ -105,19 +108,29 @@ class DeviceTrustManager @Inject constructor(
             revoked
         } catch (e: Exception) {
             val last = prefs.getLong(lastSuccessfulCheckKey(userId), 0L)
-            val stale = (last == 0L) || (System.currentTimeMillis() - last > TRUST_FRESHNESS_TTL_MS)
+            
+            // SECURITY: If we have NEVER successfully checked trust (last == 0),
+            // we allow a 2-minute grace period from the time this manager was initialized
+            // to allow the FIRST registration/check to complete over a slow network.
+            val timeSinceInit = System.currentTimeMillis() - initTimestamp
+            val firstCheckGrace = last == 0L && (timeSinceInit < 120_000L)
+            
+            val stale = !firstCheckGrace && (last == 0L || System.currentTimeMillis() - last > TRUST_FRESHNESS_TTL_MS)
+            
             if (stale) {
                 PrivacyLogger.w(
                     "DeviceTrustManager",
-                    "Trust check failed and freshness window expired; locking."
+                    "Trust check failed and freshness window expired; locking. (lastCheck=$last, sinceInit=$timeSinceInit)"
                 )
                 true
             } else {
-                PrivacyLogger.i("DeviceTrustManager", "Trust check failed but recent success exists; allowing.")
+                PrivacyLogger.i("DeviceTrustManager", "Trust check failed but within grace/TTL; allowing access.")
                 false
             }
         }
     }
+
+    private val initTimestamp = System.currentTimeMillis()
 
     suspend fun revokeDevice(userId: String, deviceId: String) {
         try {

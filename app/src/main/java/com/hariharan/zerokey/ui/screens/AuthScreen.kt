@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import com.hariharan.zerokey.R
 import com.hariharan.zerokey.security.FirebaseAuthenticator
 import com.hariharan.zerokey.core.security.MasterPasswordManager
+import com.hariharan.zerokey.core.common.PrivacyLogger
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
@@ -240,10 +241,13 @@ fun AuthScreen(
                                 val currentUid = currentUser?.uid ?: throw IllegalStateException("User not logged in")
                                 masterPasswordManager.setUserId(currentUid)
                                 if (!masterPasswordManager.isSetup(context, currentUid)) {
+                                    PrivacyLogger.i("AuthScreen", "Setting up new vault...")
                                     masterPasswordManager.setupVault(context, password.toCharArray(), currentUid)
                                 } else {
+                                    PrivacyLogger.i("AuthScreen", "Unlocking existing vault...")
                                     masterPasswordManager.unlockVault(context, password.toCharArray(), currentUid)
                                 }
+                                PrivacyLogger.i("AuthScreen", "Vault open. Transitioning...")
                                 authAttemptManager.resetAttempts(currentUid)
                                 onAuthSuccess()
                             } catch (e: Exception) {

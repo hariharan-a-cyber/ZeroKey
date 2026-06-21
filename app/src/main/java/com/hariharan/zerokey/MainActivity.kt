@@ -279,10 +279,6 @@ class MainActivity : FragmentActivity() {
                                             onRefreshVault()
                                             Toast.makeText(applicationContext, "Access Revoked: This device is no longer trusted.", Toast.LENGTH_LONG).show()
                                         }
-                                    } else {
-                                        withContext(Dispatchers.Main) {
-                                            onRefreshVault()
-                                        }
                                     }
                                 }
                             }
