@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.os.Environment
 import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -498,6 +499,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 Button(
+                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
                     onClick = {
                         showRecoveryWarnDialog = false
                         val material = masterPasswordManager.createRecoveryMaterial()
@@ -581,6 +583,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                     Button(
+                        elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
                         onClick = {
                             SecureClipboard.copy(context, recoveryCodeShown ?: "")
                             Toast.makeText(context, "Copied. Store it safely.", Toast.LENGTH_SHORT).show()
@@ -599,6 +602,7 @@ fun SettingsScreen(
             text = { Text("This will re-encrypt every single item in your database with a new random key. This is a heavy operation and cannot be undone.") },
             confirmButton = {
                 Button(
+                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
                     onClick = {
                         showRotationConfirm = false
                         val activity = context as? androidx.fragment.app.FragmentActivity
@@ -660,6 +664,7 @@ fun SettingsScreen(
         var newPassVisible by remember { mutableStateOf(false) }
         var confirmPassVisible by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<String?>(null) }
+        var errorCount by remember { mutableStateOf(0) }
 
         AlertDialog(
             onDismissRequest = { showPasswordChange = false },
@@ -669,7 +674,7 @@ fun SettingsScreen(
                     Text("This will re-wrap your vault with a new key and upgrade security parameters.", style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(
                         value = currentPass,
-                        onValueChange = { currentPass = it },
+                        onValueChange = { currentPass = it; error = null },
                         label = { Text("Current Master Password") },
                         visualTransformation = if (currentPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
                         trailingIcon = {
@@ -684,7 +689,7 @@ fun SettingsScreen(
                     )
                     OutlinedTextField(
                         value = newPass,
-                        onValueChange = { newPass = it },
+                        onValueChange = { newPass = it; error = null },
                         label = { Text("New Master Password") },
                         visualTransformation = if (newPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
                         trailingIcon = {
@@ -699,7 +704,7 @@ fun SettingsScreen(
                     )
                     OutlinedTextField(
                         value = confirmPass,
-                        onValueChange = { confirmPass = it },
+                        onValueChange = { confirmPass = it; error = null },
                         label = { Text("Confirm New Password") },
                         visualTransformation = if (confirmPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
                         trailingIcon = {
@@ -712,26 +717,34 @@ fun SettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    if (error != null) {
-                        Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                    
+                    AnimatedVisibility(visible = error != null, enter = fadeIn() + expandVertically()) {
+                        key(errorCount) {
+                            Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                        }
                     }
                 }
             },
             confirmButton = {
                 Button(
+                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
                     onClick = {
                         if (currentPass.isEmpty()) {
                             error = "Enter your current password"
+                            errorCount++
                         } else if (newPass.length < 6) {
                             error = "Password must be at least 6 characters"
+                            errorCount++
                         } else if (newPass != confirmPass) {
                             error = "Passwords do not match"
+                            errorCount++
                         } else {
                             // Verify current password first.
                             try {
                                 masterPasswordManager.unlockVault(context, currentPass.toCharArray())
                             } catch (e: Exception) {
                                 error = "Current password is incorrect"
+                                errorCount++
                                 isChangingPassword = false
                                 return@Button
                             }
@@ -754,6 +767,7 @@ fun SettingsScreen(
                                     }
                                     is com.hariharan.zerokey.security.AuthResult.Error -> {
                                         error = result.message
+                                        errorCount++
                                     }
                                 }
                             }

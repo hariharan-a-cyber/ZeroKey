@@ -404,13 +404,20 @@ fun AuthScreen(
                                         isSetupRequired = true
                                     }
                                 }
-                                else errorMessage = "Google sign-in was canceled."
-                            } catch (e: Exception) { errorMessage = e.message ?: "Google sign-in failed." }
+                                else {
+                                    errorMessage = "Google sign-in was canceled."
+                                    errorCount++
+                                }
+                            } catch (e: Exception) { 
+                                errorMessage = e.message ?: "Google sign-in failed." 
+                                errorCount++
+                            }
                             isLoading = false
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     shape = RoundedCornerShape(20.dp),
+                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
                     enabled = !isLoading
                 ) { Text("Continue with Google", fontWeight = FontWeight.Medium) }
 
@@ -425,6 +432,7 @@ fun AuthScreen(
                         var recCode by remember { mutableStateOf("") }
                         var recNewPass by remember { mutableStateOf("") }
                         var recError by remember { mutableStateOf<String?>(null) }
+                        var recErrorCount by remember { mutableStateOf(0) }
                         var recLoading by remember { mutableStateOf(false) }
                         AlertDialog(
                             onDismissRequest = { showRecovery = false },
@@ -432,42 +440,57 @@ fun AuthScreen(
                             text = {
                                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Text("Enter recovery code and choose a new master password.", style = MaterialTheme.typography.bodySmall)
-                                    OutlinedTextField(value = recCode, onValueChange = { recCode = it }, label = { Text("Recovery Code") }, modifier = Modifier.fillMaxWidth())
-                                    OutlinedTextField(value = recNewPass, onValueChange = { recNewPass = it }, label = { Text("New Master Password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                                    if (recError != null) Text(recError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                                    OutlinedTextField(value = recCode, onValueChange = { recCode = it; recError = null }, label = { Text("Recovery Code") }, modifier = Modifier.fillMaxWidth())
+                                    OutlinedTextField(value = recNewPass, onValueChange = { recNewPass = it; recError = null }, label = { Text("New Master Password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                                    
+                                    AnimatedVisibility(visible = recError != null, enter = fadeIn() + expandVertically()) {
+                                        key(recErrorCount) {
+                                            Text(recError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                        }
+                                    }
                                 }
                             },
                             confirmButton = {
-                                Button(enabled = !recLoading && recNewPass.length >= 6 && (recCode.length == 32 || recCode.length == 64), onClick = {
-                                    scope.launch {
-                                        recLoading = true; recError = null
-                                        try {
-                                            val blobs = mutableListOf<MasterPasswordManager.RecoveryBlob>()
-                                            val uid = currentUser?.uid
-                                            if (uid != null) {
-                                                try {
-                                                    val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
-                                                    (doc.get("recoveryBlobs") as? List<*>)?.forEach { item ->
-                                                        val map = item as? Map<*, *>
-                                                        val b = map?.get("blob") as? String
-                                                        val i = map?.get("iv") as? String
-                                                        val f = map?.get("vaultKeyFingerprint") as? String
-                                                        if (b != null && i != null) blobs.add(MasterPasswordManager.RecoveryBlob(b, i, f ?: ""))
-                                                    }
-                                                } catch (_: Exception) {}
+                                Button(
+                                    enabled = !recLoading && recNewPass.length >= 6 && (recCode.length == 32 || recCode.length == 64), 
+                                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
+                                    onClick = {
+                                        scope.launch {
+                                            recLoading = true; recError = null
+                                            try {
+                                                val blobs = mutableListOf<MasterPasswordManager.RecoveryBlob>()
+                                                val uid = currentUser?.uid
+                                                if (uid != null) {
+                                                    try {
+                                                        val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
+                                                        (doc.get("recoveryBlobs") as? List<*>)?.forEach { item ->
+                                                            val map = item as? Map<*, *>
+                                                            val b = map?.get("blob") as? String
+                                                            val i = map?.get("iv") as? String
+                                                            val f = map?.get("vaultKeyFingerprint") as? String
+                                                            if (b != null && i != null) blobs.add(MasterPasswordManager.RecoveryBlob(b, i, f ?: ""))
+                                                        }
+                                                    } catch (_: Exception) {}
+                                                }
+                                                if (blobs.isEmpty()) blobs.addAll(masterPasswordManager.getLocalRecoveryBlobs(context))
+                                                if (blobs.isEmpty()) {
+                                                    recError = "No recovery keys found."
+                                                    recErrorCount++
+                                                }
+                                                else { 
+                                                    uid?.let { masterPasswordManager.setUserId(it) }
+                                                    masterPasswordManager.recoverWithRecoveryCode(context, blobs, recCode, recNewPass.toCharArray())
+                                                    showRecovery = false
+                                                    onAuthSuccess() 
+                                                }
+                                            } catch (e: Exception) { 
+                                                recError = e.message ?: "Invalid code." 
+                                                recErrorCount++
                                             }
-                                            if (blobs.isEmpty()) blobs.addAll(masterPasswordManager.getLocalRecoveryBlobs(context))
-                                            if (blobs.isEmpty()) recError = "No recovery keys found."
-                                            else { 
-                                                uid?.let { masterPasswordManager.setUserId(it) }
-                                                masterPasswordManager.recoverWithRecoveryCode(context, blobs, recCode, recNewPass.toCharArray())
-                                                showRecovery = false
-                                                onAuthSuccess() 
-                                            }
-                                        } catch (e: Exception) { recError = e.message ?: "Invalid code." }
-                                        recLoading = false
+                                            recLoading = false
+                                        }
                                     }
-                                }) { Text("Reset Password") }
+                                ) { Text("Reset Password") }
                             },
                             dismissButton = { TextButton(onClick = { showRecovery = false }) { Text("Cancel") } }
                         )
