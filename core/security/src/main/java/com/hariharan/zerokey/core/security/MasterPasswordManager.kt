@@ -34,9 +34,55 @@ class MasterPasswordManager @Inject constructor(
         private const val KEY_AUTH_TIMEOUT = "auth_timeout"
         private const val KEY_CRYPTO_VERSION = "crypto_version"
         private const val KEY_LOCK_ON_EXIT = "lock_on_exit"
+        private const val KEY_LOCK_GRACE_PERIOD = "lock_grace_period"
         private const val KEY_RECOVERY_BLOB = "recovery_wrapped_vault_key"
         private const val KEY_RECOVERY_IV = "recovery_iv"
+        private const val KEY_IDENTITY_PUB = "identity_public_key"
         private const val DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS = 60_000L // 60 seconds
+        private const val DEFAULT_LOCK_GRACE_PERIOD_MS = 0L // Immediately
+    }
+
+    fun getIdentityPublicKey(context: Context, userId: String): String? {
+        return getPrefs(context, userId).getString(KEY_IDENTITY_PUB, null)
+    }
+
+    /**
+     * Generates a persistent RSA keypair in the Keystore for signing identity events.
+     */
+    fun ensureIdentityKeys(context: Context, userId: String) {
+        val alias = "zk_identity_$userId"
+        val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (!ks.containsAlias(alias)) {
+            val kpg = java.security.KeyPairGenerator.getInstance(
+                android.security.keystore.KeyProperties.KEY_ALGORITHM_RSA, 
+                "AndroidKeyStore"
+            )
+            kpg.initialize(
+                android.security.keystore.KeyGenParameterSpec.Builder(
+                    alias,
+                    android.security.keystore.KeyProperties.PURPOSE_SIGN or android.security.keystore.KeyProperties.PURPOSE_VERIFY
+                )
+                .setDigests(android.security.keystore.KeyProperties.DIGEST_SHA256)
+                .setSignaturePaddings(android.security.keystore.KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
+                .setKeySize(2048)
+                .build()
+            )
+            val kp = kpg.generateKeyPair()
+            val pubB64 = Base64.encodeToString(kp.public.encoded, Base64.NO_WRAP)
+            getPrefs(context, userId).edit().putString(KEY_IDENTITY_PUB, pubB64).apply()
+        }
+    }
+
+    fun signData(userId: String, data: String): String {
+        val alias = "zk_identity_$userId"
+        val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val entry = ks.getEntry(alias, null) as? java.security.KeyStore.PrivateKeyEntry
+            ?: throw IllegalStateException("Identity keys missing")
+        
+        val sig = java.security.Signature.getInstance("SHA256withRSA")
+        sig.initSign(entry.privateKey)
+        sig.update(data.toByteArray())
+        return Base64.encodeToString(sig.sign(), Base64.NO_WRAP)
     }
 
     @Volatile
@@ -49,10 +95,42 @@ class MasterPasswordManager @Inject constructor(
     private var lastUnlockTimestamp: Long = 0
 
     @Volatile
+    private var lastBackgroundTimestamp: Long = 0
+
+    @Volatile
     private var cachedPrefs: android.content.SharedPreferences? = null
     
     @Volatile
     private var currentUserId: String? = null
+
+    /**
+     * Records the time the app was sent to the background.
+     */
+    fun onAppBackgrounded() {
+        lastBackgroundTimestamp = System.currentTimeMillis()
+    }
+
+    /**
+     * Checks if the vault should remain unlocked based on the grace period.
+     */
+    fun shouldStayUnlockedOnResume(context: Context): Boolean {
+        if (vaultKey == null) return false
+        val gracePeriod = getLockGracePeriod(context)
+        if (gracePeriod == 0L) return false // Lock immediately
+        
+        val elapsed = System.currentTimeMillis() - lastBackgroundTimestamp
+        return elapsed < gracePeriod
+    }
+
+    fun getLockGracePeriod(context: Context): Long {
+        val uid = currentUserId ?: return DEFAULT_LOCK_GRACE_PERIOD_MS
+        return getPrefs(context, uid).getLong(KEY_LOCK_GRACE_PERIOD, DEFAULT_LOCK_GRACE_PERIOD_MS)
+    }
+
+    fun setLockGracePeriod(context: Context, graceMs: Long) {
+        val uid = currentUserId ?: return
+        getPrefs(context, uid).edit().putLong(KEY_LOCK_GRACE_PERIOD, graceMs).apply()
+    }
 
     /**
      * Checks if a master password and vault key have already been set up for this user.
@@ -78,13 +156,22 @@ class MasterPasswordManager @Inject constructor(
      */
     fun setupVault(context: Context, password: CharArray, userId: String) {
         currentUserId = userId
-        encryptionManager.init()
+        try {
+            encryptionManager.init()
+        } catch (e: Exception) {
+            throw IllegalStateException("Root Key Hardware failure: ${e.message}")
+        }
+        
         val salt = keyDerivationManager.generateSalt()
         val version = KeyDerivationManager.LATEST_VERSION
         saveSalt(context, salt, userId)
         saveCryptoVersion(context, version, userId)
         
-        val derivedMasterKey = keyDerivationManager.deriveKey(password, salt, version)
+        val derivedMasterKey = try {
+            keyDerivationManager.deriveKey(password, salt, version)
+        } catch (e: Exception) {
+            throw IllegalStateException("Master Key derivation failed: ${e.message}")
+        }
         
         // Generate a random 256-bit Vault Key
         val rawVaultKey = ByteArray(32)
@@ -92,11 +179,18 @@ class MasterPasswordManager @Inject constructor(
         val newVaultKey = SecretKeySpec(rawVaultKey, "AES")
         
         // Layer 1: Encrypt with Master Key
-        // CRITICAL: Explicit IV for software-backed key separation
-        val innerEncrypted = encryptionManager.encryptWithKey(rawVaultKey, derivedMasterKey)
+        val innerEncrypted = try {
+            encryptionManager.encryptWithKey(rawVaultKey, derivedMasterKey)
+        } catch (e: Exception) {
+            throw IllegalStateException("Vault Key software layer encryption failed: ${e.message}")
+        }
         
         // Layer 2: Wrap with hardware-backed Root Key
-        val outerEncrypted = encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
+        val outerEncrypted = try {
+            encryptionManager.encryptWithRootKey(innerEncrypted.cipherText)
+        } catch (e: Exception) {
+            throw IllegalStateException("Vault Key hardware layer encryption failed: ${e.message}")
+        }
         
         saveHardenedVaultKey(context, innerEncrypted.iv, outerEncrypted, userId)
         
@@ -450,12 +544,17 @@ class MasterPasswordManager @Inject constructor(
 
     /**
      * Responds to system memory pressure by purging sensitive keys.
+     * Note: Respects the Lock Grace Period on backgrounding.
      */
     fun onTrimMemory(level: Int, context: Context? = null) {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            if (context == null || shouldLockOnExit(context)) {
+            onAppBackgrounded()
+            if (context == null || (shouldLockOnExit(context) && getLockGracePeriod(context) == 0L)) {
                 lockVault()
             }
+        } else if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            // Under extreme memory pressure, wipe keys immediately regardless of grace period.
+            lockVault()
         }
     }
 

@@ -152,6 +152,23 @@ object SecurityModule {
 
     @Provides
     @Singleton
+    fun provideEmergencyAccessManager(
+        firestore: FirebaseFirestore,
+        cryptoEngine: CryptoEngine
+    ): com.hariharan.zerokey.emergency.EmergencyAccessManager {
+        return com.hariharan.zerokey.emergency.EmergencyAccessManager(
+            firestore,
+            cryptoEngine,
+            object : com.hariharan.zerokey.emergency.EmergencyNotificationService {
+                override suspend fun notifyOwnerOfRequest(ownerId: String, email: String, deadline: Long) {}
+                override suspend fun notifyRequestCancelled(email: String) {}
+                override suspend fun notifyAccessGranted(ownerId: String, email: String) {}
+            }
+        )
+    }
+
+    @Provides
+    @Singleton
     fun provideFirebaseAuthenticator(): com.hariharan.zerokey.security.FirebaseAuthenticator = 
         com.hariharan.zerokey.security.FirebaseAuthenticator()
 }

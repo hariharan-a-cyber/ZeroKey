@@ -20,8 +20,21 @@ service cloud.firestore {
     }
 
     // Encrypted vault snapshots — only the owner can read/write.
-    match /encrypted_vaults/{userId} {
+    match /encrypted_vault_snapshots/{userId} {
       allow read, write: if isOwner(userId);
+    }
+
+    // Emergency Access Configuration
+    match /emergency_access_config/{userId} {
+      allow read: if signedIn(); // Contacts need to check if owner is inactive
+      allow write: if isOwner(userId);
+    }
+
+    // Emergency Access Requests
+    match /emergency_access_requests/{requestId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
     }
 
     // Device-trust records (one doc per device per user).

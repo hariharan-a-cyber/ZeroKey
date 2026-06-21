@@ -181,12 +181,15 @@ class DeviceSyncManager(
         vaultEpochId: String,
         previousSnapshotHmac: String
     ): ByteArray {
-        return deviceId.toByteArray(Charsets.UTF_8) + 
-               version.toString().toByteArray(Charsets.UTF_8) + 
-               timestamp.toString().toByteArray(Charsets.UTF_8) +
-               wrappedKey.toByteArray(Charsets.UTF_8) +
-               vaultEpochId.toByteArray(Charsets.UTF_8) +
-               previousSnapshotHmac.toByteArray(Charsets.UTF_8) +
+        // SECURITY: Use '|' delimiters to prevent canonicalization attacks
+        // (ambiguity between adjacent fields).
+        val delimiter = "|".toByteArray(Charsets.UTF_8)
+        return deviceId.toByteArray(Charsets.UTF_8) + delimiter +
+               version.toString().toByteArray(Charsets.UTF_8) + delimiter +
+               timestamp.toString().toByteArray(Charsets.UTF_8) + delimiter +
+               wrappedKey.toByteArray(Charsets.UTF_8) + delimiter +
+               vaultEpochId.toByteArray(Charsets.UTF_8) + delimiter +
+               previousSnapshotHmac.toByteArray(Charsets.UTF_8) + delimiter +
                encryptedVault
     }
 }

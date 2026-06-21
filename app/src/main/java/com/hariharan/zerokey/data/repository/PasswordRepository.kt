@@ -149,13 +149,17 @@ class PasswordRepository @Inject constructor(
     }
 
     suspend fun syncWithRemote(remoteEntities: List<PasswordEntity>) = withContext(Dispatchers.IO) {
-        // Implement record-level synchronization
-        val localEntities = passwordDao.getAllPasswordsList().associateBy { it.id }
+        // SECURITY: Match by recordUid (UUID) instead of local database ID.
+        // Local IDs are auto-incrementing and will collide between devices.
+        val localEntities = passwordDao.getAllPasswordsList().associateBy { it.recordUid }
         
         remoteEntities.forEach { remote: PasswordEntity ->
-            val local = localEntities[remote.id]
-            if (local == null || remote.lastModified > local.lastModified) {
-                passwordDao.insertPassword(remote)
+            val local = localEntities[remote.recordUid]
+            if (local == null || remote.lastModified > (local.lastModified)) {
+                // If local exists, we must preserve the local 'id' (primary key) 
+                // to avoid Room conflicts, but update all other data from remote.
+                val entityToSave = if (local != null) remote.copy(id = local.id) else remote.copy(id = 0)
+                passwordDao.insertPassword(entityToSave)
             }
         }
     }

@@ -22,11 +22,7 @@ class FeatureAccessManager(private val isPremiumFlow: StateFlow<Boolean>) {
      * Returns true if the current plan has access to the given feature.
      */
     fun hasAccess(feature: Feature): Boolean {
-        val isPremium = isPremiumFlow.value
-        return when (feature) {
-            Feature.LOCAL_VAULT, Feature.AUTOFILL, Feature.GENERATOR -> true
-            Feature.CLOUD_SYNC, Feature.BREACH_MONITORING, Feature.SECURITY_ANALYTICS -> isPremium
-            Feature.EMERGENCY_ACCESS, Feature.SECURE_SHARING -> isPremium
-        }
+        // BYPASS: For current development/release phase, all features are free.
+        return true
     }
 }

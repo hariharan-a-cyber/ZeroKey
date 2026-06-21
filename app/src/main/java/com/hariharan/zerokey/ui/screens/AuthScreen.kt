@@ -42,6 +42,9 @@ fun AuthScreen(
     onAuthSuccess: () -> Unit,
     onSignOut: () -> Unit = {}
 ) {
+    val currentUser by authenticator.userState.collectAsState()
+    val isFirebaseAuthenticated = currentUser != null
+
     var isLogin by remember { mutableStateOf(true) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -50,6 +53,8 @@ fun AuthScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
     var isRestoringSession by remember { mutableStateOf(false) }
+    var isSetupRequired by remember { mutableStateOf(false) }
+    
     var showRecovery by remember { mutableStateOf(false) }
     val canBiometric = remember { biometricUnlockManager.isEnrolled() && biometricUnlockManager.isSupported() }
     var useBiometric by remember { mutableStateOf(false) }
@@ -64,29 +69,36 @@ fun AuthScreen(
 
     LaunchedEffect(Unit) {
         while(true) {
-            val uid = authenticator.currentUser?.uid ?: "unknown"
-            val remaining = authAttemptManager.getRemainingLockoutTime(uid) / 1000
-            if (remaining > 0) {
-                lockoutSeconds = remaining
-                errorMessage = "Too many attempts. Try again in ${String.format("%02d:%02d", remaining / 60, remaining % 60)}."
-            } else if (lockoutSeconds > 0) {
-                lockoutSeconds = 0
-                errorMessage = "You can now enter your password."
+            val uid = currentUser?.uid ?: email
+            if (uid.isNotEmpty()) {
+                val remaining = authAttemptManager.getRemainingLockoutTime(uid) / 1000
+                if (remaining > 0) {
+                    lockoutSeconds = remaining
+                    errorMessage = "Too many attempts. Try again in ${String.format("%02d:%02d", remaining / 60, remaining % 60)}."
+                } else if (lockoutSeconds > 0) {
+                    lockoutSeconds = 0
+                    errorMessage = "You can now enter your password."
+                }
             }
             kotlinx.coroutines.delay(1000)
         }
     }
 
-    LaunchedEffect(authenticator.isAuthenticated) {
-        if (authenticator.isAuthenticated && !masterPasswordManager.isUnlocked()) {
-            val uid = authenticator.currentUser?.uid ?: return@LaunchedEffect
+    LaunchedEffect(isFirebaseAuthenticated) {
+        if (isFirebaseAuthenticated && !masterPasswordManager.isUnlocked()) {
+            val uid = currentUser?.uid ?: return@LaunchedEffect
             masterPasswordManager.setUserId(uid)
             if (masterPasswordManager.isSetup(context, uid)) {
                 isRestoringSession = true
+                isSetupRequired = false
                 if (canBiometric) useBiometric = true
             } else {
                 isRestoringSession = false
+                isSetupRequired = true
             }
+        } else if (!isFirebaseAuthenticated) {
+            isRestoringSession = false
+            isSetupRequired = false
         }
     }
 
@@ -99,7 +111,7 @@ fun AuthScreen(
                     if (rawKey != null) {
                         masterPasswordManager.restoreVaultKey(rawKey)
                         java.util.Arrays.fill(rawKey, 0)
-                        val uid = authenticator.currentUser?.uid ?: "unknown"
+                        val uid = currentUser?.uid ?: "unknown"
                         authAttemptManager.resetAttempts(uid)
                         onAuthSuccess()
                     }
@@ -141,16 +153,20 @@ fun AuthScreen(
             )
             
             Text(
-                text = if (isRestoringSession && useBiometric) "Unlock with biometrics to open your vault."
-                       else if (isRestoringSession) "Enter your master password to unlock your vault."
-                       else "The invisible vault for your digital life.",
+                text = when {
+                    isRestoringSession && useBiometric -> "Unlock with biometrics to open your vault."
+                    isRestoringSession -> "Enter your master password to unlock your vault."
+                    isSetupRequired -> "One last step: Create your Master Password. This password encrypts your vault and is never sent to us."
+                    else -> "The invisible vault for your digital life."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.padding(top = 8.dp, bottom = 48.dp),
                 textAlign = TextAlign.Center
             )
 
-            if (!isRestoringSession) {
+            // Hide Email field if already authenticated (Setup mode)
+            if (!isRestoringSession && !isSetupRequired) {
                 TransparentTextField(
                     value = email,
                     onValueChange = { email = it },
@@ -170,7 +186,7 @@ fun AuthScreen(
                                 if (rawKey != null) {
                                     masterPasswordManager.restoreVaultKey(rawKey)
                                     java.util.Arrays.fill(rawKey, 0)
-                                    val uid = authenticator.currentUser?.uid ?: "unknown"
+                                    val uid = currentUser?.uid ?: "unknown"
                                     authAttemptManager.resetAttempts(uid)
                                     onAuthSuccess()
                                 } else {
@@ -190,7 +206,7 @@ fun AuthScreen(
                 TransparentTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = "Master Password",
+                    label = if (isSetupRequired) "Choose Master Password" else "Master Password",
                     leadingIcon = Icons.Default.Lock,
                     keyboardType = KeyboardType.Password,
                     isPassword = true,
@@ -211,7 +227,7 @@ fun AuthScreen(
                         isLoading = true
                         errorMessage = null
                         
-                        val uidForLockout = if (isRestoringSession) authenticator.currentUser?.uid ?: "unknown" else email
+                        val uidForLockout = currentUser?.uid ?: email
                         if (authAttemptManager.isLockedOut(uidForLockout)) {
                             val rem = authAttemptManager.getRemainingLockoutTime(uidForLockout) / 1000
                             errorMessage = "Too many attempts. Try again in ${rem}s."
@@ -219,9 +235,10 @@ fun AuthScreen(
                             return@launch
                         }
 
-                        if (isRestoringSession) {
+                        if (isRestoringSession || isSetupRequired) {
                             try {
-                                val currentUid = authenticator.currentUser?.uid ?: throw IllegalStateException("User not logged in")
+                                val currentUid = currentUser?.uid ?: throw IllegalStateException("User not logged in")
+                                masterPasswordManager.setUserId(currentUid)
                                 if (!masterPasswordManager.isSetup(context, currentUid)) {
                                     masterPasswordManager.setupVault(context, password.toCharArray(), currentUid)
                                 } else {
@@ -230,27 +247,22 @@ fun AuthScreen(
                                 authAttemptManager.resetAttempts(currentUid)
                                 onAuthSuccess()
                             } catch (e: Exception) {
-                                val currentUid = authenticator.currentUser?.uid ?: "unknown"
+                                val currentUid = currentUser?.uid ?: "unknown"
                                 authAttemptManager.recordFailedAttempt(currentUid)
-                                errorMessage = "Vault unlock failed: Incorrect password"
+                                errorMessage = "Vault logic failed: ${e.message}"
                             }
                         } else {
                             val authResult = if (isLogin) authenticator.signIn(email, password) else authenticator.signUp(email, password)
                             when (authResult) {
                                 is com.hariharan.zerokey.security.AuthResult.Success -> {
-                                    try {
-                                        val newUid = authResult.user.uid
-                                        masterPasswordManager.setUserId(newUid)
-                                        if (!masterPasswordManager.isSetup(context, newUid)) {
-                                            masterPasswordManager.setupVault(context, password.toCharArray(), newUid)
-                                        } else {
-                                            masterPasswordManager.unlockVault(context, password.toCharArray(), newUid)
-                                        }
-                                        authAttemptManager.resetAttempts(newUid)
-                                        onAuthSuccess()
-                                    } catch (e: Exception) {
-                                        authAttemptManager.recordFailedAttempt(email)
-                                        errorMessage = "Vault unlock failed: Incorrect password"
+                                    // Successfully logged into Firebase, next check vault
+                                    val newUid = authResult.user.uid
+                                    masterPasswordManager.setUserId(newUid)
+                                    if (!masterPasswordManager.isSetup(context, newUid)) {
+                                        // Wait for LaunchedEffect to switch UI or handle here
+                                        isSetupRequired = true
+                                    } else {
+                                        isRestoringSession = true
                                     }
                                 }
                                 is com.hariharan.zerokey.security.AuthResult.Error -> {
@@ -264,16 +276,25 @@ fun AuthScreen(
                 modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(20.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.onSurface, contentColor = MaterialTheme.colorScheme.surface),
-                enabled = !isLoading && (isRestoringSession || email.isNotEmpty()) && password.length >= 6
+                enabled = !isLoading && (isRestoringSession || isSetupRequired || email.isNotEmpty()) && password.length >= 6
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.surface)
                 } else {
-                    Text(text = if (isRestoringSession) "Unlock Vault" else if (isLogin) "Sign In" else "Create Account", fontWeight = FontWeight.Bold)
+                    Text(
+                        text = when {
+                            isRestoringSession -> "Unlock Vault"
+                            isSetupRequired -> "Set Master Password"
+                            isLogin -> "Sign In"
+                            else -> "Create Account"
+                        }, 
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
-            if (!isRestoringSession) {
+            // Google Sign-In and Switch Login/Signup (only show if not in Setup/Unlock mode)
+            if (!isRestoringSession && !isSetupRequired) {
                 Spacer(modifier = Modifier.height(16.dp))
                 OutlinedButton(
                     onClick = {
@@ -284,7 +305,13 @@ fun AuthScreen(
                                 val user = authenticator.signInWithGoogle(context, webClientId)
                                 if (user != null) {
                                     masterPasswordManager.setUserId(user.uid)
-                                    isRestoringSession = true
+                                    if (masterPasswordManager.isSetup(context, user.uid)) {
+                                        isRestoringSession = true
+                                        isSetupRequired = false
+                                    } else {
+                                        isRestoringSession = false
+                                        isSetupRequired = true
+                                    }
                                 }
                                 else errorMessage = "Google sign-in was canceled."
                             } catch (e: Exception) { errorMessage = e.message ?: "Google sign-in failed." }
@@ -295,72 +322,75 @@ fun AuthScreen(
                     shape = RoundedCornerShape(20.dp),
                     enabled = !isLoading
                 ) { Text("Continue with Google", fontWeight = FontWeight.Medium) }
-            } else if (!useBiometric) {
-                if (showRecovery) {
-                    var recCode by remember { mutableStateOf("") }
-                    var recNewPass by remember { mutableStateOf("") }
-                    var recError by remember { mutableStateOf<String?>(null) }
-                    var recLoading by remember { mutableStateOf(false) }
-                    AlertDialog(
-                        onDismissRequest = { showRecovery = false },
-                        title = { Text("Reset with Recovery Key") },
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("Enter recovery code and choose a new master password.", style = MaterialTheme.typography.bodySmall)
-                                OutlinedTextField(value = recCode, onValueChange = { recCode = it }, label = { Text("Recovery Code") }, modifier = Modifier.fillMaxWidth())
-                                OutlinedTextField(value = recNewPass, onValueChange = { recNewPass = it }, label = { Text("New Master Password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                                if (recError != null) Text(recError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-                            }
-                        },
-                        confirmButton = {
-                            Button(enabled = !recLoading && recNewPass.length >= 6 && (recCode.length == 32 || recCode.length == 64), onClick = {
-                                scope.launch {
-                                    recLoading = true; recError = null
-                                    try {
-                                        val blobs = mutableListOf<MasterPasswordManager.RecoveryBlob>()
-                                        val uid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
-                                        if (uid != null) {
-                                            try {
-                                                val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
-                                                (doc.get("recoveryBlobs") as? List<*>)?.forEach { item ->
-                                                    val map = item as? Map<*, *>
-                                                    val b = map?.get("blob") as? String
-                                                    val i = map?.get("iv") as? String
-                                                    val f = map?.get("vaultKeyFingerprint") as? String
-                                                    if (b != null && i != null) blobs.add(MasterPasswordManager.RecoveryBlob(b, i, f ?: ""))
-                                                }
-                                            } catch (_: Exception) {}
-                                        }
-                                        if (blobs.isEmpty()) blobs.addAll(masterPasswordManager.getLocalRecoveryBlobs(context))
-                                        if (blobs.isEmpty()) recError = "No recovery keys found."
-                                        else { 
-                                            uid?.let { masterPasswordManager.setUserId(it) }
-                                            masterPasswordManager.recoverWithRecoveryCode(context, blobs, recCode, recNewPass.toCharArray())
-                                            showRecovery = false
-                                            onAuthSuccess() 
-                                        }
-                                    } catch (e: Exception) { recError = e.message ?: "Invalid code." }
-                                    recLoading = false
-                                }
-                            }) { Text("Reset Password") }
-                        },
-                        dismissButton = { TextButton(onClick = { showRecovery = false }) { Text("Cancel") } }
-                    )
-                }
-                TextButton(onClick = { showRecovery = true }, modifier = Modifier.padding(top = 4.dp)) { Text("Forgot master password?", color = MaterialTheme.colorScheme.primary) }
-                TextButton(onClick = { 
-                    onSignOut()
-                    isRestoringSession = false 
-                    email = ""
-                    password = ""
-                }) { Text("Sign in with a different account", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
 
-            if (!isRestoringSession) {
                 Spacer(modifier = Modifier.height(32.dp))
                 TextButton(onClick = { isLogin = !isLogin }, modifier = Modifier.padding(bottom = 16.dp)) {
                     Text(text = if (isLogin) "New to ZeroKey? Create Account" else "Already a member? Sign In", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            } else if (!useBiometric) {
+                // Secondary options for setup/unlock mode
+                if (isRestoringSession) {
+                    if (showRecovery) {
+                        var recCode by remember { mutableStateOf("") }
+                        var recNewPass by remember { mutableStateOf("") }
+                        var recError by remember { mutableStateOf<String?>(null) }
+                        var recLoading by remember { mutableStateOf(false) }
+                        AlertDialog(
+                            onDismissRequest = { showRecovery = false },
+                            title = { Text("Reset with Recovery Key") },
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text("Enter recovery code and choose a new master password.", style = MaterialTheme.typography.bodySmall)
+                                    OutlinedTextField(value = recCode, onValueChange = { recCode = it }, label = { Text("Recovery Code") }, modifier = Modifier.fillMaxWidth())
+                                    OutlinedTextField(value = recNewPass, onValueChange = { recNewPass = it }, label = { Text("New Master Password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                                    if (recError != null) Text(recError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                                }
+                            },
+                            confirmButton = {
+                                Button(enabled = !recLoading && recNewPass.length >= 6 && (recCode.length == 32 || recCode.length == 64), onClick = {
+                                    scope.launch {
+                                        recLoading = true; recError = null
+                                        try {
+                                            val blobs = mutableListOf<MasterPasswordManager.RecoveryBlob>()
+                                            val uid = currentUser?.uid
+                                            if (uid != null) {
+                                                try {
+                                                    val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
+                                                    (doc.get("recoveryBlobs") as? List<*>)?.forEach { item ->
+                                                        val map = item as? Map<*, *>
+                                                        val b = map?.get("blob") as? String
+                                                        val i = map?.get("iv") as? String
+                                                        val f = map?.get("vaultKeyFingerprint") as? String
+                                                        if (b != null && i != null) blobs.add(MasterPasswordManager.RecoveryBlob(b, i, f ?: ""))
+                                                    }
+                                                } catch (_: Exception) {}
+                                            }
+                                            if (blobs.isEmpty()) blobs.addAll(masterPasswordManager.getLocalRecoveryBlobs(context))
+                                            if (blobs.isEmpty()) recError = "No recovery keys found."
+                                            else { 
+                                                uid?.let { masterPasswordManager.setUserId(it) }
+                                                masterPasswordManager.recoverWithRecoveryCode(context, blobs, recCode, recNewPass.toCharArray())
+                                                showRecovery = false
+                                                onAuthSuccess() 
+                                            }
+                                        } catch (e: Exception) { recError = e.message ?: "Invalid code." }
+                                        recLoading = false
+                                    }
+                                }) { Text("Reset Password") }
+                            },
+                            dismissButton = { TextButton(onClick = { showRecovery = false }) { Text("Cancel") } }
+                        )
+                    }
+                    TextButton(onClick = { showRecovery = true }, modifier = Modifier.padding(top = 4.dp)) { Text("Forgot master password?", color = MaterialTheme.colorScheme.primary) }
+                }
+
+                TextButton(onClick = { 
+                    onSignOut()
+                    isRestoringSession = false 
+                    isSetupRequired = false
+                    email = ""
+                    password = ""
+                }) { Text("Sign in with a different account", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
     }

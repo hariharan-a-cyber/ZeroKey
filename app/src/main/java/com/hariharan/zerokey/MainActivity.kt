@@ -105,16 +105,19 @@ class MainActivity : FragmentActivity() {
             ZeroKeyTheme {
                 val scope = rememberCoroutineScope()
                 val context = LocalContext.current
-                var isAuthenticated by remember { mutableStateOf(authenticator.isAuthenticated) }
+                
+                val user by authenticator.userState.collectAsState()
+                val isAuthenticated = user != null
+
                 // Use a key-based state that we can refresh on resume
                 var vaultCheckKey by remember { mutableStateOf(0) }
-                val isVaultUnlocked = remember(vaultCheckKey) { masterPasswordManager.isUnlocked() }
+                val isVaultUnlocked = remember(vaultCheckKey, user?.uid) { masterPasswordManager.isUnlocked() }
                 
                 val onSignOut = {
                     scope.launch {
                         biometricVaultUnlockManager.clear()
+                        masterPasswordManager.lockVault() // CRITICAL: Clear keys on sign out
                         authenticator.signOut(context)
-                        isAuthenticated = false
                         vaultCheckKey++
                     }
                     Unit
@@ -186,7 +189,6 @@ class MainActivity : FragmentActivity() {
                         biometricUnlockManager = biometricVaultUnlockManager,
                         onSignOut = onSignOut,
                         onAuthSuccess = { 
-                            isAuthenticated = true
                             masterPasswordManager.authorizeAutofill()
                             // Register this device as trusted so remote-revocation can work later.
                             lifecycleScope.launch {
@@ -243,43 +245,55 @@ class MainActivity : FragmentActivity() {
         val lifecycleOwner = LocalLifecycleOwner.current
         val scope = rememberCoroutineScope()
 
-        DisposableEffect(lifecycleOwner) {
-            val observer = LifecycleEventObserver { _, event ->
-                when (event) {
-                    Lifecycle.Event.ON_STOP -> {
-                        // Only purge keys (which forces re-unlock) if the user's policy says so.
-                        if (!isChangingConfigurations && masterPasswordManager.shouldLockOnExit(applicationContext)) {
-                            masterPasswordManager.lockVault()
-                            viewModel.lockVault()
-                        }
-                        onRefreshVault()
-                    }
-                    Lifecycle.Event.ON_RESUME -> {
-                        // Security Hardening: Active Revocation Check
-                        scope.launch {
-                            val uid = authenticator.uid ?: "guest"
-                            if (masterPasswordManager.isUnlocked() && deviceTrustManager.isCurrentDeviceRevoked(uid)) {
-                                withContext(Dispatchers.Main) {
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        when (event) {
+                            Lifecycle.Event.ON_STOP -> {
+                                masterPasswordManager.onAppBackgrounded()
+                                // If grace period is 0 (Immediately), lock now.
+                                // Otherwise, we check on resume if the period expired.
+                                if (!isChangingConfigurations && 
+                                    masterPasswordManager.getLockGracePeriod(applicationContext) == 0L &&
+                                    masterPasswordManager.shouldLockOnExit(applicationContext)) {
                                     masterPasswordManager.lockVault()
                                     viewModel.lockVault()
-                                    onRefreshVault()
-                                    Toast.makeText(applicationContext, "Access Revoked: This device is no longer trusted.", Toast.LENGTH_LONG).show()
                                 }
-                            } else {
-                                withContext(Dispatchers.Main) {
-                                    onRefreshVault()
+                                onRefreshVault()
+                            }
+                            Lifecycle.Event.ON_RESUME -> {
+                                // Check if grace period expired while backgrounded
+                                if (masterPasswordManager.isUnlocked() && 
+                                    masterPasswordManager.shouldLockOnExit(applicationContext) &&
+                                    !masterPasswordManager.shouldStayUnlockedOnResume(applicationContext)) {
+                                    masterPasswordManager.lockVault()
+                                    viewModel.lockVault()
+                                }
+
+                                // Security Hardening: Active Revocation Check
+                                scope.launch {
+                                    val uid = authenticator.uid ?: "guest"
+                                    if (masterPasswordManager.isUnlocked() && deviceTrustManager.isCurrentDeviceRevoked(uid)) {
+                                        withContext(Dispatchers.Main) {
+                                            masterPasswordManager.lockVault()
+                                            viewModel.lockVault()
+                                            onRefreshVault()
+                                            Toast.makeText(applicationContext, "Access Revoked: This device is no longer trusted.", Toast.LENGTH_LONG).show()
+                                        }
+                                    } else {
+                                        withContext(Dispatchers.Main) {
+                                            onRefreshVault()
+                                        }
+                                    }
                                 }
                             }
+                            else -> {}
                         }
                     }
-                    else -> {}
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
+                    }
                 }
-            }
-            lifecycleOwner.lifecycle.addObserver(observer)
-            onDispose {
-                lifecycleOwner.lifecycle.removeObserver(observer)
-            }
-        }
 
         val uid = authenticator.uid ?: "guest"
         LaunchedEffect(uid) {
@@ -511,11 +525,18 @@ fun ZeroKeyApp(
                 biometricUnlockManager = biometricUnlockManager,
                 onBack = { navController.popBackStack() },
                 onManageDevices = { navController.navigate(Screen.DeviceManagement.route) },
+                onEmergencyAccess = { navController.navigate(Screen.EmergencyAccess.route) },
                 onSignOut = onSignOut
             )
         }
         composable(Screen.DeviceManagement.route) {
             DeviceManagementScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.EmergencyAccess.route) {
+            EmergencyAccessScreen(
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() }
             )
