@@ -24,17 +24,37 @@ service cloud.firestore {
       allow read, write: if isOwner(userId);
     }
 
-    // Emergency Access Configuration
+    // Emergency Access Configuration — readable ONLY by the owner or the named
+    // trusted contact. (Previously: any signed-in user could read any config,
+    // leaking trusted contacts' UIDs and emails for every ZeroKey user.)
     match /emergency_access_config/{userId} {
-      allow read: if signedIn(); // Contacts need to check if owner is inactive
+      allow read: if signedIn() && (
+        request.auth.uid == userId ||
+        request.auth.uid == resource.data.trustedContactUid
+      );
       allow write: if isOwner(userId);
     }
 
-    // Emergency Access Requests
+    // Emergency Access Requests — strict scoping.
+    //
+    // SECURITY: the previous wide-open rules let any signed-in user update any
+    // request's status. A trusted contact could create a request and immediately
+    // flip status=GRANTED + approveAt=0 via the Firebase REST API, bypassing the
+    // 48-hour safety window and claiming the vault key. These tightened rules
+    // restrict status/approveAt changes to the OWNER only.
     match /emergency_access_requests/{requestId} {
-      allow read: if signedIn();
-      allow create: if signedIn();
-      allow update: if signedIn();
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.ownerUid ||
+        request.auth.uid == resource.data.requesterUid
+      );
+      allow create: if signedIn()
+                    && request.resource.data.requesterUid == request.auth.uid
+                    && request.resource.data.status == "PENDING";
+      allow update: if signedIn()
+                    && request.auth.uid == resource.data.ownerUid
+                    && request.resource.data.diff(resource.data)
+                          .affectedKeys().hasOnly(["status", "approveAt"]);
+      allow delete: if false;
     }
 
     // Device-trust records (one doc per device per user).

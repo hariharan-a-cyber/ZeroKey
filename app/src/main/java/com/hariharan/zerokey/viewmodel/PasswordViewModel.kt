@@ -462,9 +462,10 @@ class PasswordViewModel @Inject constructor(
 
     fun setUserId(uid: String) {
         userId = uid
-        masterPasswordManager.setUserId(uid) // Bind manager to current user
-        refreshDeviceList()
+        masterPasswordManager.setUserId(uid)
+        loadInitialData()
         refreshEmergencyConfig()
+        refreshOwnerActivity()
     }
 
     fun refreshEmergencyConfig() {
@@ -478,6 +479,28 @@ class PasswordViewModel @Inject constructor(
                 emergencyConfig = doc.toObject(com.hariharan.zerokey.emergency.EmergencyAccessConfig::class.java)
             } catch (e: Exception) {
                 PrivacyLogger.e("PasswordViewModel", "Failed to fetch emergency config", e)
+            }
+        }
+    }
+
+    /**
+     * Refresh `lastOwnerActivity` on the owner's emergency_access_config doc.
+     * Called every time the owner successfully unlocks / re-enters the app, so
+     * the "inactivity" trigger reflects actual activity instead of just
+     * time-since-setup. Best-effort: failures (offline, no config) are silent.
+     */
+    private fun refreshOwnerActivity() {
+        if (userId.isBlank() || userId == "guest") return
+        viewModelScope.launch {
+            try {
+                com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("emergency_access_config")
+                    .document(userId)
+                    .update("lastOwnerActivity", System.currentTimeMillis())
+                    .await()
+            } catch (_: Exception) {
+                // Document may not exist (user hasn't configured Emergency Access)
+                // or device is offline — both fine, just skip the refresh.
             }
         }
     }
