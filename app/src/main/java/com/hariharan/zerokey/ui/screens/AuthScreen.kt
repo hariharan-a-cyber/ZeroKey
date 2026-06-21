@@ -1,8 +1,6 @@
 package com.hariharan.zerokey.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -52,6 +50,7 @@ fun AuthScreen(
     var passwordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var errorCount by remember { mutableStateOf(0) }
     
     var isRestoringSession by remember { mutableStateOf(false) }
     var isSetupRequired by remember { mutableStateOf(false) }
@@ -228,7 +227,12 @@ fun AuthScreen(
             } else {
                 TransparentTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = { 
+                        password = it
+                        if (errorMessage != null) {
+                            errorMessage = null // Clear error when user starts typing again
+                        }
+                    },
                     label = if (isSetupRequired) "Choose Master Password" else "Master Password",
                     leadingIcon = Icons.Default.Lock,
                     keyboardType = KeyboardType.Password,
@@ -238,8 +242,22 @@ fun AuthScreen(
                 )
             }
 
-            AnimatedVisibility(visible = errorMessage != null, enter = fadeIn(), exit = fadeOut()) {
-                Text(text = errorMessage ?: "", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp), textAlign = TextAlign.Center)
+            AnimatedVisibility(
+                visible = errorMessage != null, 
+                enter = fadeIn() + expandVertically() + scaleIn(initialScale = 0.9f), 
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                key(errorCount) {
+                    Text(
+                        text = errorMessage ?: "", 
+                        color = MaterialTheme.colorScheme.error, 
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), 
+                        modifier = Modifier
+                            .padding(top = 16.dp)
+                            .animateContentSize(),
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(48.dp))
@@ -311,7 +329,8 @@ fun AuthScreen(
                             } catch (e: Exception) {
                                 val currentUid = currentUser?.uid ?: "unknown"
                                 authAttemptManager.recordFailedAttempt(currentUid)
-                                errorMessage = "Vault logic failed: ${e.message}"
+                                errorMessage = "Incorrect password. Please try again."
+                                errorCount++ // Force re-animate the error text
                             }
                         } else {
                             val authResult = if (isLogin) authenticator.signIn(email, password) else authenticator.signUp(email, password)
@@ -329,15 +348,25 @@ fun AuthScreen(
                                 }
                                 is com.hariharan.zerokey.security.AuthResult.Error -> {
                                     errorMessage = authResult.message
+                                    errorCount++ // Force re-animate
                                 }
                             }
                         }
                         isLoading = false
                     }
                 },
-                modifier = Modifier.fillMaxWidth().height(60.dp),
+                modifier = Modifier.fillMaxWidth().height(64.dp), // Increased height slightly
                 shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.onSurface, contentColor = MaterialTheme.colorScheme.surface),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.onSurface, 
+                    contentColor = MaterialTheme.colorScheme.surface,
+                    disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                ),
+                elevation = ButtonDefaults.buttonElevation(
+                    defaultElevation = 0.dp,
+                    pressedElevation = 8.dp, // High contrast pop on click
+                    hoveredElevation = 4.dp
+                ),
                 enabled = !isLoading && (isRestoringSession || isSetupRequired || email.isNotEmpty()) && password.length >= 6
             ) {
                 if (isLoading) {
