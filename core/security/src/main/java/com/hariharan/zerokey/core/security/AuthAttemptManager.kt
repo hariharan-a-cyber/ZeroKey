@@ -28,12 +28,28 @@ class AuthAttemptManager @Inject constructor(@ApplicationContext private val con
     companion object {
         private const val KEY_ATTEMPTS = "failed_attempts"
         private const val KEY_LOCKOUT_TIME = "lockout_time"
+        private const val KEY_LAST_ATTEMPT_TIME = "last_attempt_time"
+        private const val ATTEMPT_EXPIRATION_TIME_MS = 30 * 60 * 1000L // 30 minutes
     }
 
     fun recordFailedAttempt(userId: String = "unknown") {
         val prefs = getPrefs(userId)
-        val attempts = getFailedAttempts(userId) + 1
-        prefs.edit().putInt(KEY_ATTEMPTS, attempts).apply()
+        val now = System.currentTimeMillis()
+        val lastAttempt = prefs.getLong(KEY_LAST_ATTEMPT_TIME, 0)
+        
+        var attempts = getFailedAttempts(userId)
+        
+        // If more than 30 mins passed since last failure, reset the "streak"
+        if (lastAttempt != 0L && (now - lastAttempt > ATTEMPT_EXPIRATION_TIME_MS)) {
+            attempts = 1
+        } else {
+            attempts += 1
+        }
+
+        prefs.edit()
+            .putInt(KEY_ATTEMPTS, attempts)
+            .putLong(KEY_LAST_ATTEMPT_TIME, now)
+            .apply()
         
         // Security Logging: Track masked user and device.
         val deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
@@ -60,7 +76,11 @@ class AuthAttemptManager @Inject constructor(@ApplicationContext private val con
     }
 
     fun resetAttempts(userId: String = "unknown") {
-        getPrefs(userId).edit().putInt(KEY_ATTEMPTS, 0).remove(KEY_LOCKOUT_TIME).apply()
+        getPrefs(userId).edit()
+            .putInt(KEY_ATTEMPTS, 0)
+            .remove(KEY_LOCKOUT_TIME)
+            .remove(KEY_LAST_ATTEMPT_TIME)
+            .apply()
     }
 
     fun isLockedOut(userId: String = "unknown"): Boolean {
@@ -70,7 +90,20 @@ class AuthAttemptManager @Inject constructor(@ApplicationContext private val con
         return System.currentTimeMillis() < lockoutUntil
     }
 
-    fun getFailedAttempts(userId: String = "unknown"): Int = getPrefs(userId).getInt(KEY_ATTEMPTS, 0)
+    fun getFailedAttempts(userId: String = "unknown"): Int {
+        val prefs = getPrefs(userId)
+        val attempts = prefs.getInt(KEY_ATTEMPTS, 0)
+        if (attempts == 0) return 0
+
+        val lastAttempt = prefs.getLong(KEY_LAST_ATTEMPT_TIME, 0)
+        val now = System.currentTimeMillis()
+
+        // If the last attempt expired, treat current count as 0
+        if (lastAttempt != 0L && (now - lastAttempt > ATTEMPT_EXPIRATION_TIME_MS)) {
+            return 0
+        }
+        return attempts
+    }
     
     fun getRemainingLockoutTime(userId: String = "unknown"): Long {
         val lockoutUntil = getPrefs(userId).getLong(KEY_LOCKOUT_TIME, 0)

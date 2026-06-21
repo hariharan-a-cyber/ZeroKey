@@ -395,14 +395,11 @@ fun AuthScreen(
                             try {
                                 val user = authenticator.signInWithGoogle(context, webClientId)
                                 if (user != null) {
+                                    // Successfully logged in via Google.
+                                    // We DO NOT set isSetupRequired here anymore.
+                                    // The LaunchedEffect(isFirebaseAuthenticated) will trigger,
+                                    // check the cloud vault, and decide if setup is needed.
                                     masterPasswordManager.setUserId(user.uid)
-                                    if (masterPasswordManager.isSetup(context, user.uid)) {
-                                        isRestoringSession = true
-                                        isSetupRequired = false
-                                    } else {
-                                        isRestoringSession = false
-                                        isSetupRequired = true
-                                    }
                                 }
                                 else {
                                     errorMessage = "Google sign-in was canceled."

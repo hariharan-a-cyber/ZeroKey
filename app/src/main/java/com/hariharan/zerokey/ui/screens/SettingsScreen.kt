@@ -89,6 +89,7 @@ fun SettingsScreen(
 
     val gracePeriodOptions = listOf(
         TimeoutOption("Immediately (Safest)", 0L),
+        TimeoutOption("15 Seconds", 15_000L),
         TimeoutOption("30 Seconds", 30_000L),
         TimeoutOption("2 Minutes", 120_000L),
         TimeoutOption("5 Minutes (Home Only)", 300_000L)

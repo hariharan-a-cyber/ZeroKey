@@ -107,6 +107,9 @@ class FirebaseAuthenticator {
         return try {
             val result = credentialManager.getCredential(context, request)
             handleGoogleCredential(result)
+        } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
+            PrivacyLogger.i("FirebaseAuthenticator", "Google sign-in canceled by user")
+            null
         } catch (e: NoCredentialException) {
             val errorMsg = "GOOGLE_ERROR: No matching accounts found. (1. Check Web Client ID: $serverClientId, 2. Check if a Google account is logged into this phone, 3. Check if your local SHA-1 fingerprint matches Firebase)"
             PrivacyLogger.e("FirebaseAuthenticator", errorMsg)

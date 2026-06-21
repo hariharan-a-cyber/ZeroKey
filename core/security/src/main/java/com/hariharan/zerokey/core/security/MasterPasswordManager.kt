@@ -42,7 +42,7 @@ class MasterPasswordManager @Inject constructor(
         private const val KEY_RECOVERY_IV = "recovery_iv"
         private const val KEY_IDENTITY_PUB = "identity_public_key"
         private const val DEFAULT_AUTOFILL_AUTH_TIMEOUT_MS = 60_000L // 60 seconds
-        private const val DEFAULT_LOCK_GRACE_PERIOD_MS = 15_000L // 15 seconds (Safety Buffer)
+        private const val DEFAULT_LOCK_GRACE_PERIOD_MS = 0L // Immediately (Safest Default)
     }
 
     fun getIdentityPublicKey(context: Context, userId: String): String? {
@@ -124,11 +124,22 @@ class MasterPasswordManager @Inject constructor(
      */
     fun shouldStayUnlockedOnResume(context: Context): Boolean {
         if (vaultKey == null) return false
+        
+        // If we haven't been backgrounded yet in this session, we should stay unlocked
+        if (lastBackgroundTimestamp == 0L) return true
+
         val gracePeriod = getLockGracePeriod(context)
         if (gracePeriod == 0L) return false // Lock immediately
         
         val elapsed = System.currentTimeMillis() - lastBackgroundTimestamp
         return elapsed < gracePeriod
+    }
+
+    /**
+     * Resets the background timer. Should be called after successful unlock.
+     */
+    fun resetBackgroundTimer() {
+        lastBackgroundTimestamp = 0L
     }
 
     fun getLockGracePeriod(context: Context): Long {

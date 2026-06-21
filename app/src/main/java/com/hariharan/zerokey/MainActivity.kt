@@ -81,6 +81,8 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        masterPasswordManager.resetBackgroundTimer() // Start with a fresh timer
+        
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -187,6 +189,7 @@ class MainActivity : FragmentActivity() {
                         biometricUnlockManager = biometricVaultUnlockManager,
                         onSignOut = onSignOut,
                         onAuthSuccess = { 
+                            masterPasswordManager.resetBackgroundTimer() // Reset timer on successful unlock
                             masterPasswordManager.authorizeAutofill()
                             // Register this device as trusted so remote-revocation can work later.
                             lifecycleScope.launch {

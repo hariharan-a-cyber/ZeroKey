@@ -1,76 +1,99 @@
-# ZeroKey - Privacy-First Password Manager
+# ZeroKey - The Invisible Vault for Your Digital Life
 
-**ZeroKey** is a modern, privacy-focused, zero-knowledge password manager designed for Android. It prioritizes local security and user autonomy, ensuring that your sensitive data remains yours and yours alone.
+**ZeroKey** is a next-generation, privacy-obsessed, zero-knowledge password manager for Android. Built with a "Security-by-Default" philosophy, it combines state-of-the-art cryptography with hardware-backed security to ensure your most sensitive data never leaves your control in a readable form.
 
 ---
 
-## Security Architecture
+## 🔐 Security Architecture
 
-ZeroKey implements a robust "Zero-Knowledge" system, meaning no one—including the developers—can access your vault.
+ZeroKey is designed so that even with full access to our servers or your physical device, your passwords remain mathematically inaccessible without your Master Password.
 
-### 1. Hardened Key Derivation
-Uses **Argon2id**, the industry-standard memory-hard function for key derivation. 
-- **Parameters (2026 Standard)**: 256MB RAM cost, 4 iterations, 4 parallelism.
-- **Versioning**: Supports cryptographic upgrades through versioned parameter sets.
+### 1. Hardened Key Derivation (Argon2id)
+We use **Argon2id**, the winner of the Password Hashing Competition, to derive your Master Key.
+- **2026 Standards**: Configured with 256MB RAM cost, 4 iterations, and 4-way parallelism to resist GPU/ASIC brute-force attacks.
+- **Dynamic Salt**: Every user has a unique, cryptographically strong 16-byte salt stored in the cloud (encrypted) and locally.
 
 ### 2. Multi-Layer Envelope Encryption
-Your Vault Key (256-bit AES) is protected by multiple layers:
-- **Layer 1 (Software)**: Wrapped by a Master Key derived from your password.
-- **Layer 2 (Hardware)**: Further wrapped by a Root Key stored in the **Android Keystore** (utilizing **StrongBox** or **TEE** if available).
+Your data is protected by a 256-bit AES Vault Key, which is never stored in plaintext. It is wrapped in two distinct layers:
+- **Layer 1 (User Bound)**: Wrapped using your Master Key (derived from your password).
+- **Layer 2 (Hardware Bound)**: Wrapped using the **Android Keystore**, utilizing **StrongBox** or **Trusted Execution Environment (TEE)** where available. This ensures the key cannot be extracted even if the OS is compromised.
 
-### 3. Data Integrity
-- **HMAC-SHA256**: Used for vault integrity checks to detect and prevent unauthorized data tampering.
-- **Rollback Protection**: Prevents attackers from forcing the app to load an older, potentially vulnerable version of your vault.
+### 3. Zero-Knowledge Cloud Sync
+Syncing is entirely optional and "Zero-Knowledge":
+- **End-to-End Encryption**: Data is encrypted *before* it leaves your device using your private keys.
+- **Metadata Protection**: Service names, usernames, and notes are all encrypted. We only see opaque blobs.
+- **Rollback Protection**: Monotonic versioning and HMAC-SHA256 integrity checks prevent "Rollback Attacks" where an attacker forces your app to load an older, potentially vulnerable state.
 
----
-
-## Key Features
-
-- **Secure Vault**: Full CRUD operations for passwords, notes, and sensitive metadata.
-- **Security Dashboard**: Advanced analysis of password health (weak, duplicate, or breached passwords).
-- **Phishing-Resistant Autofill**: Native Android Autofill service with built-in domain verification and threat-aware behavior (auto-disables if tampering is detected).
-- **Zero-Knowledge Sync**: Optional cross-device synchronization via encrypted blobs on Firestore.
-- **Secure Sharing**: Share credentials with trusted contacts using ephemeral key exchange.
-- **Emergency Access**: Cryptographic time-lock mechanism for vault recovery by trusted contacts in case of inactivity.
-- **Stealth Hardening**: 
-    - Frida/Runtime hook detection.
-    - Root and Debugger detection.
-    - Global screenshot/screen-recording protection (`FLAG_SECURE`).
-    - Clipboard and crash log sanitization.
+### 4. Stealth & Anti-Tamper
+- **Runtime Protection**: Detects Frida, Xposed, and other hooking frameworks.
+- **Root/Debugger Detection**: Alerts users if the device environment is compromised.
+- **Privacy Hardening**: Global `FLAG_SECURE` prevents screenshots/recordings; clipboards and crash logs are automatically sanitized of sensitive patterns.
 
 ---
 
-## Technical Stack
+## ✨ Key Features
 
-- **UI**: Jetpack Compose (Declarative UI)
-- **Database**: Room (SQL persistence with local encryption)
-- **Networking**: Ktor
-- **Backend**: Firebase Auth & Cloud Firestore
-- **Encryption**: Google Tink & Argon2Kt
-- **Architecture**: Modular Clean Architecture
+- **🛡️ Secure Vault**: Full CRUD support for passwords and encrypted notes with instant search and favorites.
+- **🚀 Phishing-Resistant Autofill**: A native Android Autofill service that verifies app signatures and domains before offering credentials.
+- **📊 Security Dashboard**: 
+    - **Entropy Analysis**: Real-time strength calculation for every password.
+    - **Breach Monitoring**: Identifies passwords exposed in known data leaks.
+    - **Health Score**: A holistic view of your digital security posture.
+- **🤝 Secure Sharing**: Share credentials with other ZeroKey users using secure asymmetric key exchange (Tink-based).
+- **⌛ Emergency Access**: A cryptographic "dead man's switch" that allows a trusted contact to recover your vault after a predefined period of inactivity.
+- **🛠️ Smart Lock Policies**:
+    - **Lock on App Exit**: Customizable grace periods (Immediate to 5 mins).
+    - **Auth Cool Down**: Failed attempt counters reset after 30 minutes of inactivity to prevent accidental lockouts.
+- **🎲 Advanced Generator**: Create high-entropy, customizable passwords on the fly.
 
 ---
 
-## Getting Started
+## 🛠️ Technical Stack
+
+- **UI**: 100% Jetpack Compose (Material 3)
+- **Architecture**: Modular Clean Architecture with MVVM
+- **Dependency Injection**: Hilt
+- **Database**: Room (SQL persistence with SIV/GCM encryption)
+- **Cryptography**: Google Tink, Argon2Kt, and Android Keystore
+- **Backend**: Firebase Auth (Identity) & Cloud Firestore (Encrypted Blobs)
+- **Concurrency**: Kotlin Coroutines & Flow
+
+---
+
+## 📂 Project Structure
+
+ZeroKey is built with a highly modularized structure for better separation of concerns and build performance:
+- `:app`: Main UI, ViewModels, and Feature orchestration.
+- `:core:security`: The "heart" of the app - Key management, KDF, and session logic.
+- `:core:crypto`: Low-level encryption primitives and Tink wrappers.
+- `:core:database`: Room database definitions and DAO patterns.
+- `:core:common`: Privacy-aware logging and utility functions.
+- `:feature:*`: Independent modules for Vault, Settings, and Dashboard.
+
+---
+
+## 🚀 Getting Started
 
 ### Prerequisites
-- Android Studio Ladybug or later.
-- JDK 17+.
-- A Firebase project (for Sync/Auth features).
+- Android Studio Ladybug (2024.2.1) or later.
+- Android SDK 26+ (Android 8.0).
+- A valid `google-services.json` from your Firebase project.
 
-### Installation
+### Build Instructions
 1. Clone the repository.
-2. Add your `google-services.json` to the `app/` directory.
-3. Sync Gradle and Build.
+2. Place `google-services.json` in the `/app` folder.
+3. Perform a **Gradle Sync**.
+4. Build and Run on a physical device (recommended for Keystore features).
 
 ---
 
-## License & Usage
+## 📜 License & Usage
 
-**This repository is public for viewing and learning purposes only.**
+**This repository is for portfolio and learning purposes only.**
 
-You may not copy, reuse, modify, redistribute, or commercialize this code without explicit permission. All rights reserved.
+© 2026 Hari. All rights reserved. 
+Redistribution, modification, or commercial use of this source code is strictly prohibited without explicit written consent.
 
 ---
 
-Copyright (c) 2026 Hari.
+*ZeroKey: Because privacy shouldn't be a premium feature.*
