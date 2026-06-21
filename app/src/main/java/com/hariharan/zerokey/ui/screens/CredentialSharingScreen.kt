@@ -66,6 +66,10 @@ fun CredentialSharingScreen(
 
     val ownFingerprint = remember { viewModel.getOwnSharingFingerprint(context) }
 
+    LaunchedEffect(userId) {
+        viewModel.refreshIncomingShares()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -252,20 +256,44 @@ fun CredentialSharingScreen(
                     fontWeight = FontWeight.Bold
                 )
 
-                // Actual logic for incoming shares would require a new Flow in ViewModel
                 Surface(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.LockOpen, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f), modifier = Modifier.size(48.dp))
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "No pending incoming shares.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
+                    if (viewModel.incomingShares.isEmpty()) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.LockOpen, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f), modifier = Modifier.size(48.dp))
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "No pending incoming shares.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(viewModel.incomingShares) { share ->
+                                IncomingShareItem(
+                                    share = share,
+                                    onAccept = {
+                                        viewModel.acceptShare(context, share) { ok, msg ->
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onReject = {
+                                        scope.launch {
+                                            viewModel.shareManager?.deleteShare(share.id)
+                                            viewModel.refreshIncomingShares()
+                                            Toast.makeText(context, "Share rejected.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -359,5 +387,61 @@ fun CredentialSharingScreen(
                 TextButton(onClick = { showCredentialPicker = false }) { Text("Cancel") }
             }
         )
+    }
+}
+
+@Composable
+fun IncomingShareItem(
+    share: com.hariharan.zerokey.sharing.IncomingShare,
+    onAccept: () -> Unit,
+    onReject: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Shared by:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    share.senderUserId,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                Text(
+                    java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(share.timestamp)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+            
+            IconButton(onClick = onReject) {
+                Icon(Icons.Default.Close, contentDescription = "Reject", tint = MaterialTheme.colorScheme.error)
+            }
+            
+            Button(
+                onClick = onAccept,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            ) {
+                Text("Accept")
+            }
+        }
     }
 }

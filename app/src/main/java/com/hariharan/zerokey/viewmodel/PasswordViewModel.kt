@@ -104,6 +104,9 @@ class PasswordViewModel @Inject constructor(
     var isConfiguringEmergency by mutableStateOf(false)
         private set
 
+    var incomingShares = mutableStateListOf<com.hariharan.zerokey.sharing.IncomingShare>()
+        private set
+
     val keySecurityLevel: KeySecurityLevel
         get() = encryptionManager.getKeySecurityLevel()
 
@@ -466,6 +469,43 @@ class PasswordViewModel @Inject constructor(
         loadInitialData()
         refreshEmergencyConfig()
         refreshOwnerActivity()
+        refreshIncomingShares()
+    }
+
+    fun refreshIncomingShares() {
+        if (userId == "guest") return
+        viewModelScope.launch {
+            val shares = shareManager?.fetchIncomingShares(userId) ?: emptyList()
+            incomingShares.clear()
+            incomingShares.addAll(shares)
+        }
+    }
+
+    fun acceptShare(context: Context, share: com.hariharan.zerokey.sharing.IncomingShare, onComplete: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val mgr = shareManager ?: throw IllegalStateException("Sharing unavailable")
+                val plaintext = mgr.decryptShare(context, share, userId)
+                
+                val json = Json { ignoreUnknownKeys = true }
+                val data = json.decodeFromString<Map<String, String>>(plaintext)
+                
+                val service = data["serviceName"] ?: throw IllegalStateException("Missing service name")
+                val user = data["username"] ?: throw IllegalStateException("Missing username")
+                val pass = data["password"] ?: throw IllegalStateException("Missing password")
+                val notes = data["notes"]
+                
+                repository.savePassword(service, user, pass, notes)
+                mgr.deleteShare(share.id)
+                
+                loadPasswords()
+                refreshIncomingShares()
+                onComplete(true, "Shared password accepted and saved.")
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Accept share failed", e)
+                onComplete(false, e.message ?: "Failed to accept share.")
+            }
+        }
     }
 
     fun refreshEmergencyConfig() {

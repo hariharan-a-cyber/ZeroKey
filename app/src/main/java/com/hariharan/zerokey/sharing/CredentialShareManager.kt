@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import com.google.crypto.tink.BinaryKeysetReader
 import com.google.crypto.tink.BinaryKeysetWriter
+import com.google.crypto.tink.HybridDecrypt
 import com.google.crypto.tink.HybridEncrypt
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.hybrid.HybridConfig
@@ -123,4 +124,43 @@ class CredentialShareManager @Inject constructor(
             )
         ).await()
     }
+
+    suspend fun fetchIncomingShares(userId: String): List<IncomingShare> {
+        return try {
+            val snapshots = firestore.collection(COLLECTION_SHARES)
+                .whereEqualTo("recipientUserId", userId)
+                .get().await()
+            
+            snapshots.documents.map { doc ->
+                IncomingShare(
+                    id = doc.id,
+                    senderUserId = doc.getString("senderUserId") ?: "",
+                    encryptedPayload = doc.getString("encryptedPayload") ?: "",
+                    timestamp = doc.getLong("timestamp") ?: 0L
+                )
+            }
+        } catch (e: Exception) { emptyList() }
+    }
+
+    fun decryptShare(context: Context, share: IncomingShare, userId: String): String {
+        val privateHandle = getPrivateKeysetHandle(context)
+        val hybridDecrypt = privateHandle.getPrimitive(HybridDecrypt::class.java)
+        
+        val contextInfo = "${share.senderUserId}:$userId".toByteArray()
+        val encrypted = Base64.decode(share.encryptedPayload, Base64.NO_WRAP)
+        
+        val decrypted = hybridDecrypt.decrypt(encrypted, contextInfo)
+        return String(decrypted, Charsets.UTF_8)
+    }
+
+    suspend fun deleteShare(shareId: String) {
+        firestore.collection(COLLECTION_SHARES).document(shareId).delete().await()
+    }
 }
+
+data class IncomingShare(
+    val id: String,
+    val senderUserId: String,
+    val encryptedPayload: String,
+    val timestamp: Long
+)
