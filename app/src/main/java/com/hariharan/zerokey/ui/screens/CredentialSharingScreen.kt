@@ -286,11 +286,8 @@ fun CredentialSharingScreen(
                                         }
                                     },
                                     onReject = {
-                                        scope.launch {
-                                            viewModel.shareManager?.deleteShare(share.id)
-                                            viewModel.refreshIncomingShares()
-                                            Toast.makeText(context, "Share rejected.", Toast.LENGTH_SHORT).show()
-                                        }
+                                        viewModel.deleteIncomingShare(share.id)
+                                        Toast.makeText(context, "Share rejected.", Toast.LENGTH_SHORT).show()
                                     }
                                 )
                             }

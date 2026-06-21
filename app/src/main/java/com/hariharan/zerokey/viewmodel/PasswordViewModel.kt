@@ -508,6 +508,17 @@ class PasswordViewModel @Inject constructor(
         }
     }
 
+    fun deleteIncomingShare(shareId: String) {
+        viewModelScope.launch {
+            try {
+                shareManager?.deleteShare(shareId)
+                refreshIncomingShares()
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Delete share failed", e)
+            }
+        }
+    }
+
     fun refreshEmergencyConfig() {
         viewModelScope.launch {
             try {
