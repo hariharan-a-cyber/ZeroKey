@@ -64,7 +64,32 @@ class EncryptionManager @Inject constructor() {
 
     private fun generateRootKey() {
         try {
-            val builder = KeyGenParameterSpec.Builder(
+            // Step 1: Try with StrongBox (most secure) if available (Android 9+)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                try {
+                    val strongBoxSpec = KeyGenParameterSpec.Builder(
+                        ROOT_KEY_ALIAS,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                    )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .setRandomizedEncryptionRequired(true)
+                        .setIsStrongBoxBacked(true)
+                        .build()
+                    
+                    val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+                    keyGen.init(strongBoxSpec)
+                    keyGen.generateKey()
+                    PrivacyLogger.i("EncryptionManager", "Root key generated with StrongBox")
+                    return
+                } catch (e: Exception) {
+                    PrivacyLogger.w("EncryptionManager", "StrongBox not supported, falling back to TEE: ${e.message}")
+                }
+            }
+
+            // Step 2: Fall back to standard Keystore (TEE or Software)
+            val standardSpec = KeyGenParameterSpec.Builder(
                 ROOT_KEY_ALIAS,
                 KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
             )
@@ -72,17 +97,16 @@ class EncryptionManager @Inject constructor() {
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
                 .setRandomizedEncryptionRequired(true)
-
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                try { builder.setIsStrongBoxBacked(true) } catch (_: Exception) {}
-            }
+                .build()
 
             val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-            keyGen.init(builder.build())
+            keyGen.init(standardSpec)
             keyGen.generateKey()
+            PrivacyLogger.i("EncryptionManager", "Root key generated with standard Keystore (TEE/Software)")
+
         } catch (e: Exception) {
-            PrivacyLogger.e("EncryptionManager", "Root key generation failed: ${e.message}")
-            throw e
+            PrivacyLogger.e("EncryptionManager", "Fatal hardware key generation failure: ${e.message}")
+            throw IllegalStateException("Failed to generate root hardware key: ${e.message}")
         }
     }
 

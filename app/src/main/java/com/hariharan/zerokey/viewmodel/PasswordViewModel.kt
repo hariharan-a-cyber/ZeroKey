@@ -25,7 +25,9 @@ import com.hariharan.zerokey.utils.HealthReport
 import com.hariharan.zerokey.utils.PasswordHealthAnalyzer
 import com.hariharan.zerokey.utils.PasswordStrength
 import com.hariharan.zerokey.utils.PasswordUtils
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.Dispatchers
+
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
@@ -54,7 +56,8 @@ class PasswordViewModel @Inject constructor(
     private val featureAccessManager: com.hariharan.zerokey.security.FeatureAccessManager? = null,
     private val privacyModeManager: PrivacyModeManager?,
     private val deviceTrustManager: DeviceTrustManager?,
-    private val authenticator: FirebaseAuthenticator
+    private val authenticator: FirebaseAuthenticator,
+    private val emergencyAccessManager: com.hariharan.zerokey.emergency.EmergencyAccessManager? = null
 ) : ViewModel() {
 
     private var userId: String = "guest"
@@ -91,8 +94,14 @@ class PasswordViewModel @Inject constructor(
     var isOfflineMode by mutableStateOf(privacyModeManager?.isOfflineOnly() ?: false)
         private set
 
+    var emergencyConfig by mutableStateOf<com.hariharan.zerokey.emergency.EmergencyAccessConfig?>(null)
+        private set
+
     var trustedDevices = mutableStateListOf<com.hariharan.zerokey.security.DeviceInfo>()
     var isLoadingDevices by mutableStateOf(false)
+        private set
+
+    var isConfiguringEmergency by mutableStateOf(false)
         private set
 
     val keySecurityLevel: KeySecurityLevel
@@ -455,6 +464,84 @@ class PasswordViewModel @Inject constructor(
         userId = uid
         masterPasswordManager.setUserId(uid) // Bind manager to current user
         refreshDeviceList()
+        refreshEmergencyConfig()
+    }
+
+    fun refreshEmergencyConfig() {
+        viewModelScope.launch {
+            try {
+                val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("emergency_access_config")
+                    .document(userId)
+                    .get()
+                    .await()
+                emergencyConfig = doc.toObject(com.hariharan.zerokey.emergency.EmergencyAccessConfig::class.java)
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Failed to fetch emergency config", e)
+            }
+        }
+    }
+
+    fun setupEmergencyAccess(
+        context: Context,
+        contactUid: String,
+        contactEmail: String,
+        inactivityDays: Int,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            isConfiguringEmergency = true
+            try {
+                val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
+                val vaultKey = masterPasswordManager.getVaultKey() ?: throw IllegalStateException("Vault is locked")
+                
+                // 1. Ensure owner has identity keys for signing
+                masterPasswordManager.ensureIdentityKeys(context, userId)
+                val ownerPubKey = masterPasswordManager.getIdentityPublicKey(context, userId)!!
+
+                // 2. Fetch contact's public key (using shareManager logic)
+                val contactPubKeyB64 = shareManager?.fetchPublicKey(contactUid) 
+                    ?: throw IllegalArgumentException("Contact not found. They must be a ZeroKey user.")
+                
+                // 3. Encrypt Vault Key for contact
+                val contactHandle = com.google.crypto.tink.KeysetHandle.readNoSecret(
+                    com.google.crypto.tink.BinaryKeysetReader.withBytes(android.util.Base64.decode(contactPubKeyB64, android.util.Base64.NO_WRAP))
+                )
+                val hybridEncrypt = contactHandle.getPrimitive(com.google.crypto.tink.HybridEncrypt::class.java)
+                val encryptedVK = hybridEncrypt.encrypt(vaultKey.encoded, "emergency:$userId:$contactUid".toByteArray())
+                val encryptedVK_B64 = android.util.Base64.encodeToString(encryptedVK, android.util.Base64.NO_WRAP)
+
+                // 4. Sign the config
+                val dataToSign = userId + contactUid + encryptedVK_B64
+                val signature = masterPasswordManager.signData(userId, dataToSign)
+
+                val config = com.hariharan.zerokey.emergency.EmergencyAccessConfig(
+                    ownerUid = userId,
+                    trustedContactUid = contactUid,
+                    contactEmail = contactEmail,
+                    inactivityDays = inactivityDays,
+                    encryptedVaultKey = encryptedVK_B64,
+                    iv = "", // Tink handles IV
+                    ownerPublicKey = ownerPubKey,
+                    contactPublicKey = contactPubKeyB64,
+                    lastOwnerActivity = System.currentTimeMillis(),
+                    setupSignature = signature,
+                    status = com.hariharan.zerokey.emergency.EmergencyStatus.CONFIGURED
+                )
+
+                val result = manager.setupEmergencyAccess(config)
+                if (result is com.hariharan.zerokey.emergency.EmergencySetupResult.Success) {
+                    refreshEmergencyConfig()
+                    onResult(true, "Emergency Access enabled.")
+                } else {
+                    onResult(false, (result as com.hariharan.zerokey.emergency.EmergencySetupResult.Failure).reason)
+                }
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Configuration failed")
+            } finally {
+                isConfiguringEmergency = false
+            }
+        }
     }
 
     fun refreshDeviceList() {

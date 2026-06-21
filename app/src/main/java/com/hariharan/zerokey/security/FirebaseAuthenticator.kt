@@ -17,6 +17,10 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.tasks.await
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 /**
  * FINAL RE-WRITTEN MODERNIZED IMPLEMENTATION (2026 Recommended Stack)
  * This version explicitly uses .setFilterByAuthorizedAccounts(false) to ensure all accounts appear.
@@ -24,6 +28,15 @@ import kotlinx.coroutines.tasks.await
 class FirebaseAuthenticator {
 
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    
+    private val _userState = MutableStateFlow(auth.currentUser)
+    val userState: StateFlow<FirebaseUser?> = _userState.asStateFlow()
+
+    init {
+        auth.addAuthStateListener { firebaseAuth ->
+            _userState.value = firebaseAuth.currentUser
+        }
+    }
 
     val currentUser: FirebaseUser?
         get() = auth.currentUser

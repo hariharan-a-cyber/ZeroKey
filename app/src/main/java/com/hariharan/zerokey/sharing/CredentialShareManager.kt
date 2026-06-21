@@ -40,7 +40,7 @@ class CredentialShareManager @Inject constructor(
             .keysetHandle
     }
 
-    private suspend fun fetchPublicKey(userId: String): String? {
+    suspend fun fetchPublicKey(userId: String): String? {
         return try {
             val snapshot = firestore.collection(COLLECTION_KEYS).document(userId).get().await()
             snapshot.getString("publicKey")

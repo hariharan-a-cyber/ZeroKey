@@ -19,6 +19,8 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Visibility
@@ -55,6 +57,7 @@ fun SettingsScreen(
     biometricUnlockManager: com.hariharan.zerokey.security.BiometricVaultUnlockManager,
     onBack: () -> Unit,
     onManageDevices: () -> Unit,
+    onEmergencyAccess: () -> Unit,
     onSignOut: () -> Unit
 ) {
     val context = LocalContext.current
@@ -63,9 +66,12 @@ fun SettingsScreen(
     
     var currentTimeout by remember { mutableStateOf(masterPasswordManager.getAuthTimeout(context)) }
     var lockOnExit by remember { mutableStateOf(masterPasswordManager.shouldLockOnExit(context)) }
+    var currentGracePeriod by remember { mutableStateOf(masterPasswordManager.getLockGracePeriod(context)) }
+    
     var bioEnabled by remember { mutableStateOf(biometricUnlockManager.isEnrolled()) }
     var recoveryCodeShown by remember { mutableStateOf<String?>(null) }
     var showTimeoutDialog by remember { mutableStateOf(false) }
+    var showGracePeriodDialog by remember { mutableStateOf(false) }
     var showRotationConfirm by remember { mutableStateOf(false) }
     var showPasswordChange by remember { mutableStateOf(false) }
     var isRotating by remember { mutableStateOf(false) }
@@ -78,6 +84,13 @@ fun SettingsScreen(
         TimeoutOption("15 Seconds", 15_000L),
         TimeoutOption("30 Seconds", 30_000L),
         TimeoutOption("60 Seconds", 60_000L)
+    )
+
+    val gracePeriodOptions = listOf(
+        TimeoutOption("Immediately (Safest)", 0L),
+        TimeoutOption("30 Seconds", 30_000L),
+        TimeoutOption("2 Minutes", 120_000L),
+        TimeoutOption("5 Minutes (Home Only)", 300_000L)
     )
 
     Scaffold(
@@ -191,6 +204,42 @@ fun SettingsScreen(
 
                 Surface(
                     shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    onClick = { if (lockOnExit) showGracePeriodDialog = true }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.HourglassTop, null, tint = if (lockOnExit) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Lock Grace Period", 
+                                style = MaterialTheme.typography.bodyLarge, 
+                                fontWeight = FontWeight.Bold,
+                                color = if (lockOnExit) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                            )
+                            Text(
+                                text = if (!lockOnExit) "Disabled (Never Lock)" else (gracePeriodOptions.find { it.value == currentGracePeriod }?.label ?: "Immediately"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    "Determines how long the vault stays decrypted after you leave the app before requiring a re-unlock.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                 ) {
                     Row(
@@ -275,6 +324,30 @@ fun SettingsScreen(
                             Text("Manage Trusted Devices", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
                             Text(
                                 text = "Audit or revoke vault access.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    onClick = { onEmergencyAccess() }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Security, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Emergency Access", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "Setup a digital heir for your vault.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -739,6 +812,50 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showTimeoutDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
+    if (showGracePeriodDialog) {
+        AlertDialog(
+            onDismissRequest = { showGracePeriodDialog = false },
+            title = { Text("Lock Grace Period") },
+            text = {
+                Column(Modifier.selectableGroup()) {
+                    gracePeriodOptions.forEach { option ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .selectable(
+                                    selected = (option.value == currentGracePeriod),
+                                    onClick = {
+                                        currentGracePeriod = option.value
+                                        masterPasswordManager.setLockGracePeriod(context, option.value)
+                                        showGracePeriodDialog = false
+                                    },
+                                    role = Role.RadioButton
+                                )
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = (option.value == currentGracePeriod),
+                                onClick = null
+                            )
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 16.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showGracePeriodDialog = false }) {
                     Text("Close")
                 }
             }
