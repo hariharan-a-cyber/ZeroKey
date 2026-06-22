@@ -599,6 +599,18 @@ fun SettingsScreen(
                             recoveryCodeShown = null
                         }
                     ) { Text("Copy & Close", style = MaterialTheme.typography.labelMedium) }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 8.dp,
+                        hoveredElevation = 4.dp
+                    ),
+                    onClick = {
+                        exportRecoveryKeysToTxt(context, recoveryCodeShown ?: "")
+                    }
+                ) { Text("Download as .txt", style = MaterialTheme.typography.labelMedium) }
             }
         )
     }
@@ -891,6 +903,39 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+private fun exportRecoveryKeysToTxt(context: android.content.Context, codes: String) {
+    try {
+        val resolver = context.contentResolver
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "ZeroKey_Recovery_Codes_${System.currentTimeMillis()}.txt")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+            }
+        }
+
+        // Use standard MediaStore insert
+        val uri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+        } else {
+            // Fallback for older versions or just use common storage
+            resolver.insert(android.provider.MediaStore.Files.getContentUri("external"), contentValues)
+        }
+
+        uri?.let {
+            resolver.openOutputStream(it)?.use { outputStream ->
+                val header = "ZEROKEY RECOVERY CODES\nGenerated: ${java.util.Date()}\n\n"
+                val body = codes.replace("-", "\n")
+                val footer = "\n\nKEEP THIS FILE OFFLINE AND SECURE."
+                outputStream.write((header + body + footer).toByteArray())
+            }
+            android.widget.Toast.makeText(context, "Saved to Downloads", android.widget.Toast.LENGTH_LONG).show()
+        }
+    } catch (e: Exception) {
+        android.widget.Toast.makeText(context, "Export failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
     }
 }
 
