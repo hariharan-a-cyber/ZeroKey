@@ -500,7 +500,11 @@ fun SettingsScreen(
             },
             confirmButton = {
                 Button(
-                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
+                    elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 8.dp,
+                        hoveredElevation = 4.dp
+                    ),
                     onClick = {
                         showRecoveryWarnDialog = false
                         val material = masterPasswordManager.createRecoveryMaterial()
@@ -584,7 +588,11 @@ fun SettingsScreen(
             },
             confirmButton = {
                     Button(
-                        elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
+                        elevation = ButtonDefaults.buttonElevation(
+                            defaultElevation = 0.dp,
+                            pressedElevation = 8.dp,
+                            hoveredElevation = 4.dp
+                        ),
                         onClick = {
                             SecureClipboard.copy(context, recoveryCodeShown ?: "")
                             Toast.makeText(context, "Copied. Store it safely.", Toast.LENGTH_SHORT).show()
@@ -603,7 +611,11 @@ fun SettingsScreen(
             text = { Text("This will re-encrypt every single item in your database with a new random key. This is a heavy operation and cannot be undone.") },
             confirmButton = {
                 Button(
-                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
+                    elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 8.dp,
+                        hoveredElevation = 4.dp
+                    ),
                     onClick = {
                         showRotationConfirm = false
                         val activity = context as? androidx.fragment.app.FragmentActivity
@@ -728,7 +740,11 @@ fun SettingsScreen(
             },
             confirmButton = {
                 Button(
-                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
+                    elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 8.dp,
+                        hoveredElevation = 4.dp
+                    ),
                     onClick = {
                         if (currentPass.isEmpty()) {
                             error = "Enter your current password"

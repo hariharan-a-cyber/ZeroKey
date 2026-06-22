@@ -414,9 +414,19 @@ fun AuthScreen(
                     },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     shape = RoundedCornerShape(20.dp),
-                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
+                    elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 8.dp,
+                        hoveredElevation = 4.dp
+                    ),
                     enabled = !isLoading
-                ) { Text("Continue with Google", fontWeight = FontWeight.Medium) }
+                ) { 
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Continue with Google", fontWeight = FontWeight.Medium) 
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(32.dp))
                 TextButton(onClick = { isLogin = !isLogin }, modifier = Modifier.padding(bottom = 16.dp)) {
@@ -450,7 +460,11 @@ fun AuthScreen(
                             confirmButton = {
                                 Button(
                                     enabled = !recLoading && recNewPass.length >= 6 && (recCode.length == 32 || recCode.length == 64), 
-                                    elevation = ButtonDefaults.buttonElevation(pressedElevation = 8.dp),
+                                    elevation = ButtonDefaults.buttonElevation(
+                                        defaultElevation = 0.dp,
+                                        pressedElevation = 8.dp,
+                                        hoveredElevation = 4.dp
+                                    ),
                                     onClick = {
                                         scope.launch {
                                             recLoading = true; recError = null
@@ -487,7 +501,13 @@ fun AuthScreen(
                                             recLoading = false
                                         }
                                     }
-                                ) { Text("Reset Password") }
+                                ) { 
+                                    if (recLoading) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                                    } else {
+                                        Text("Reset Password") 
+                                    }
+                                }
                             },
                             dismissButton = { TextButton(onClick = { showRecovery = false }) { Text("Cancel") } }
                         )

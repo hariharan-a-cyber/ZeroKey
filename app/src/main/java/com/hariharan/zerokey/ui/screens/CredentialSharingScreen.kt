@@ -306,6 +306,11 @@ fun CredentialSharingScreen(
                         containerColor = MaterialTheme.colorScheme.onSurface,
                         contentColor = MaterialTheme.colorScheme.surface
                     ),
+                    elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 8.dp,
+                        hoveredElevation = 4.dp
+                    ),
                     enabled = recipientId.isNotBlank() &&
                         selectedCredentialId != null &&
                         recipientFingerprint != null
