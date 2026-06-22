@@ -34,6 +34,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import com.hariharan.zerokey.core.crypto.KeySecurityLevel
@@ -488,14 +490,18 @@ class PasswordViewModel @Inject constructor(
                 val plaintext = mgr.decryptShare(context, share, userId)
                 
                 val json = Json { ignoreUnknownKeys = true }
-                val data = json.decodeFromString<Map<String, String>>(plaintext)
+                val jsonObj = json.parseToJsonElement(plaintext).jsonObject
                 
-                val service = data["serviceName"] ?: throw IllegalStateException("Missing service name")
-                val user = data["username"] ?: throw IllegalStateException("Missing username")
-                val pass = data["password"] ?: throw IllegalStateException("Missing password")
-                val notes = data["notes"]
+                val service = jsonObj["serviceName"]?.jsonPrimitive?.content ?: throw IllegalStateException("Missing service name")
+                val user = jsonObj["username"]?.jsonPrimitive?.content ?: throw IllegalStateException("Missing username")
+                val pass = jsonObj["password"]?.jsonPrimitive?.content ?: throw IllegalStateException("Missing password")
+                val originalNotes = jsonObj["notes"]?.jsonPrimitive?.content ?: ""
                 
-                repository.savePassword(service, user, pass, notes)
+                // Add sharing attribution
+                val attribution = "\n\n[Shared from: ${share.senderUserId}]"
+                val finalNotes = if (originalNotes.isBlank()) attribution.trim() else "$originalNotes$attribution"
+                
+                repository.savePassword(service, user, pass, finalNotes)
                 mgr.deleteShare(share.id)
                 
                 loadPasswords()
@@ -503,7 +509,7 @@ class PasswordViewModel @Inject constructor(
                 onComplete(true, "Shared password accepted and saved.")
             } catch (e: Exception) {
                 PrivacyLogger.e("PasswordViewModel", "Accept share failed", e)
-                onComplete(false, e.message ?: "Failed to accept share.")
+                onComplete(false, "Error: The shared data was malformed or incompatible.")
             }
         }
     }
