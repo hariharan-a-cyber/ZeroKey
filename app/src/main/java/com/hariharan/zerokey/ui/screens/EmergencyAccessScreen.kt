@@ -37,6 +37,11 @@ fun EmergencyAccessScreen(
     val config = viewModel.emergencyConfig
     val isConfigured = config != null
     var showSetupDialog by remember { mutableStateOf(false) }
+    var showRequestDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshEmergencyRequests()
+    }
 
     Scaffold(
         topBar = {
@@ -131,7 +136,82 @@ fun EmergencyAccessScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                // --- NEW: Pending Requests for My Vault ---
+                if (viewModel.pendingEmergencyRequestsForMe.isNotEmpty()) {
+                    Text(
+                        "Pending Access Requests",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                    
+                    viewModel.pendingEmergencyRequestsForMe.forEach { req ->
+                        EmergencyRequestItem(
+                            userId = req.requesterUid,
+                            status = "PENDING",
+                            isIncoming = true,
+                            approveAt = req.approveAt,
+                            onAction = {
+                                viewModel.approveEmergencyRequestEarly(req.requestId) { ok, msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onCancel = {
+                                viewModel.cancelEmergencyRequest(req.requestId) { ok, msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        )
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+
+                Text(
+                    "Trusted for Others",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    onClick = { showRequestDialog = true }
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.LockPerson, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Request Access", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                            Text("Request access to someone else's vault.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Icon(Icons.Default.Add, null)
+                    }
+                }
+
+                // --- NEW: Active Requests I've Made ---
+                viewModel.activeEmergencyRequests.forEach { req ->
+                    EmergencyRequestItem(
+                        userId = req.ownerUid,
+                        status = req.status.name,
+                        isIncoming = false,
+                        approveAt = req.approveAt,
+                        onAction = {
+                            if (req.status == EmergencyStatus.PENDING || req.status == EmergencyStatus.GRANTED) {
+                                viewModel.claimEmergencyAccess(context, req.requestId) { ok, msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
                 
                 Text(
                     "SECURITY NOTE: This feature uses cryptographic signing. Your trusted contact can only decrypt your vault with your permission or after the inactivity timer expires. You can revoke this at any time.",
@@ -204,6 +284,95 @@ fun EmergencyAccessScreen(
                 TextButton(onClick = { showSetupDialog = false }) { Text("Cancel") }
             }
         )
+    }
+
+    if (showRequestDialog) {
+        var ownerUid by remember { mutableStateOf("") }
+        var isRequesting by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { showRequestDialog = false },
+            title = { Text("Request Emergency Access") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Enter the User ID of the vault owner. Access will only be granted if you were nominated as their contact and the inactivity period has passed.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = ownerUid,
+                        onValueChange = { ownerUid = it },
+                        label = { Text("Owner User ID") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (ownerUid.length >= 20) {
+                            isRequesting = true
+                            viewModel.requestEmergencyAccess(context, ownerUid.trim()) { ok, msg ->
+                                isRequesting = false
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                if (ok) showRequestDialog = false
+                            }
+                        }
+                    },
+                    enabled = !isRequesting
+                ) {
+                    if (isRequesting) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White)
+                    else Text("Submit Request")
+                }
+            },
+            dismissButton = { TextButton(onClick = { showRequestDialog = false }) { Text("Cancel") } }
+        )
+    }
+}
+
+@Composable
+fun EmergencyRequestItem(
+    userId: String,
+    status: String,
+    isIncoming: Boolean,
+    approveAt: Long? = null,
+    onAction: () -> Unit = {},
+    onCancel: () -> Unit = {}
+) {
+    val remainingHours = approveAt?.let { (it - System.currentTimeMillis()) / (1000 * 60 * 60) }?.coerceAtLeast(0)
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(if (isIncoming) "From: $userId" else "To: $userId", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    text = when {
+                        status == "GRANTED" -> "Access Granted"
+                        remainingHours != null && remainingHours > 0 -> "Ready in $remainingHours hours"
+                        remainingHours != null -> "Ready to claim"
+                        else -> "Status: $status"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (status == "GRANTED") Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary
+                )
+            }
+            
+            if (isIncoming) {
+                IconButton(onClick = onCancel) { Icon(Icons.Default.Close, null, tint = MaterialTheme.colorScheme.error) }
+                Button(onClick = onAction) { Text("Approve") }
+            } else {
+                if (status == "PENDING" || status == "GRANTED") {
+                    Button(
+                        onClick = onAction,
+                        enabled = remainingHours == null || remainingHours <= 0 || status == "GRANTED"
+                    ) {
+                        Text(if (status == "GRANTED") "Unlock" else "Claim")
+                    }
+                }
+            }
+        }
     }
 }
 

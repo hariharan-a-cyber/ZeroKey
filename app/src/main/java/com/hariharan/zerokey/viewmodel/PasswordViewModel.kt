@@ -109,6 +109,12 @@ class PasswordViewModel @Inject constructor(
     var incomingShares = mutableStateListOf<com.hariharan.zerokey.sharing.IncomingShare>()
         private set
 
+    var activeEmergencyRequests = mutableStateListOf<com.hariharan.zerokey.emergency.EmergencyAccessRequest>()
+        private set
+
+    var pendingEmergencyRequestsForMe = mutableStateListOf<com.hariharan.zerokey.emergency.EmergencyAccessRequest>()
+        private set
+
     val keySecurityLevel: KeySecurityLevel
         get() = encryptionManager.getKeySecurityLevel()
 
@@ -472,6 +478,150 @@ class PasswordViewModel @Inject constructor(
         refreshEmergencyConfig()
         refreshOwnerActivity()
         refreshIncomingShares()
+        refreshEmergencyRequests()
+    }
+
+    fun refreshEmergencyRequests() {
+        if (userId == "guest") return
+        viewModelScope.launch {
+            try {
+                // 1. Requests I've made
+                val myRequests = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("emergency_access_requests")
+                    .whereEqualTo("requesterUid", userId)
+                    .get().await()
+                    .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessRequest::class.java)
+                
+                activeEmergencyRequests.clear()
+                activeEmergencyRequests.addAll(myRequests)
+
+                // 2. Requests for my vault
+                val forMe = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("emergency_access_requests")
+                    .whereEqualTo("ownerUid", userId)
+                    .whereEqualTo("status", com.hariharan.zerokey.emergency.EmergencyStatus.PENDING.name)
+                    .get().await()
+                    .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessRequest::class.java)
+                
+                pendingEmergencyRequestsForMe.clear()
+                pendingEmergencyRequestsForMe.addAll(forMe)
+            } catch (e: Exception) {
+                PrivacyLogger.e("PasswordViewModel", "Failed to refresh emergency requests", e)
+            }
+        }
+    }
+
+    fun requestEmergencyAccess(context: Context, ownerUid: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
+                val requestId = java.util.UUID.randomUUID().toString()
+                
+                // Sign the request: requestId + ownerUid + requesterUid
+                val dataToSign = requestId + ownerUid + userId
+                masterPasswordManager.ensureIdentityKeys(context, userId)
+                val signature = masterPasswordManager.signData(userId, dataToSign)
+
+                val request = com.hariharan.zerokey.emergency.EmergencyAccessRequest(
+                    requestId = requestId,
+                    ownerUid = ownerUid,
+                    requesterUid = userId,
+                    requesterSignature = signature
+                )
+
+                val result = manager.requestAccess(request)
+                when (result) {
+                    is com.hariharan.zerokey.emergency.AccessRequestResult.RequestAccepted -> {
+                        refreshEmergencyRequests()
+                        onResult(true, "Request submitted. Access will be available in 48 hours if not cancelled.")
+                    }
+                    is com.hariharan.zerokey.emergency.AccessRequestResult.OwnerStillActive -> {
+                        onResult(false, "Owner is still active. Please wait ${result.daysUntilEligible} more days.")
+                    }
+                    is com.hariharan.zerokey.emergency.AccessRequestResult.NotConfigured -> {
+                        onResult(false, "Owner has not configured you as an emergency contact.")
+                    }
+                    is com.hariharan.zerokey.emergency.AccessRequestResult.Unauthorized -> {
+                        onResult(false, "You are not authorized for this vault.")
+                    }
+                    is com.hariharan.zerokey.emergency.AccessRequestResult.Failure -> {
+                        onResult(false, result.reason)
+                    }
+                    else -> onResult(false, "Request failed.")
+                }
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Request failed")
+            }
+        }
+    }
+
+    fun claimEmergencyAccess(context: Context, requestId: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
+                val result = manager.claimVaultKey(requestId)
+                
+                if (result is com.hariharan.zerokey.emergency.ClaimResult.Success) {
+                    val shareMgr = shareManager ?: throw IllegalStateException("Sharing logic unavailable")
+                    val request = activeEmergencyRequests.find { it.requestId == requestId }!!
+                    
+                    val mockShare = com.hariharan.zerokey.sharing.IncomingShare(
+                        id = requestId,
+                        senderUserId = request.ownerUid,
+                        encryptedPayload = result.encryptedVaultKey,
+                        timestamp = System.currentTimeMillis()
+                    )
+                    
+                    val rawVaultKeyB64 = shareMgr.decryptShare(context, mockShare, userId)
+                    val rawVaultKey = android.util.Base64.decode(rawVaultKeyB64, android.util.Base64.NO_WRAP)
+                    
+                    masterPasswordManager.restoreVaultKey(rawVaultKey, request.ownerUid)
+                    onResult(true, "Vault unlocked successfully.")
+                } else if (result is com.hariharan.zerokey.emergency.ClaimResult.DelayNotElapsed) {
+                    onResult(false, "Security delay not elapsed. ${result.hoursRemaining} hours remaining.")
+                } else {
+                    onResult(false, "Claim failed.")
+                }
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Claim failed")
+            }
+        }
+    }
+
+    fun cancelEmergencyRequest(requestId: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
+                val signature = masterPasswordManager.signData(userId, requestId + "CANCEL")
+                val result = manager.cancelRequest(userId, requestId, signature)
+                if (result is com.hariharan.zerokey.emergency.CancelResult.Cancelled) {
+                    refreshEmergencyRequests()
+                    onResult(true, "Request cancelled.")
+                } else {
+                    onResult(false, "Cancellation failed.")
+                }
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Cancel failed")
+            }
+        }
+    }
+
+    fun approveEmergencyRequestEarly(requestId: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
+                val signature = masterPasswordManager.signData(userId, requestId + "APPROVE")
+                val result = manager.manualApprove(userId, requestId, signature)
+                if (result is com.hariharan.zerokey.emergency.EmergencySetupResult.Success) {
+                    refreshEmergencyRequests()
+                    onResult(true, "Access granted early.")
+                } else {
+                    onResult(false, "Approval failed.")
+                }
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Approval failed")
+            }
+        }
     }
 
     fun refreshIncomingShares() {
