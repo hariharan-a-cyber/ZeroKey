@@ -115,6 +115,9 @@ class PasswordViewModel @Inject constructor(
     var pendingEmergencyRequestsForMe = mutableStateListOf<com.hariharan.zerokey.emergency.EmergencyAccessRequest>()
         private set
 
+    var vaultsIAmContactFor = mutableStateListOf<com.hariharan.zerokey.emergency.EmergencyAccessConfig>()
+        private set
+
     val keySecurityLevel: KeySecurityLevel
         get() = encryptionManager.getKeySecurityLevel()
 
@@ -505,6 +508,16 @@ class PasswordViewModel @Inject constructor(
                 
                 pendingEmergencyRequestsForMe.clear()
                 pendingEmergencyRequestsForMe.addAll(forMe)
+
+                // 3. Vaults that have nominated me
+                val nominatedBy = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("emergency_access_config")
+                    .whereEqualTo("trustedContactUid", userId)
+                    .get().await()
+                    .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessConfig::class.java)
+                
+                vaultsIAmContactFor.clear()
+                vaultsIAmContactFor.addAll(nominatedBy)
             } catch (e: Exception) {
                 PrivacyLogger.e("PasswordViewModel", "Failed to refresh emergency requests", e)
             }

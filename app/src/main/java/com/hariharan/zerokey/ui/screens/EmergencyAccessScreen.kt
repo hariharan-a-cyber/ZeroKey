@@ -175,6 +175,20 @@ fun EmergencyAccessScreen(
                     fontWeight = FontWeight.Bold
                 )
 
+                if (viewModel.vaultsIAmContactFor.isNotEmpty()) {
+                    viewModel.vaultsIAmContactFor.forEach { config ->
+                        NominationCard(
+                            ownerUid = config.ownerUid,
+                            inactivityDays = config.inactivityDays,
+                            onRequestAccess = {
+                                viewModel.requestEmergencyAccess(context, config.ownerUid) { ok, msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        )
+                    }
+                }
+
                 Surface(
                     shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
@@ -324,6 +338,32 @@ fun EmergencyAccessScreen(
             },
             dismissButton = { TextButton(onClick = { showRequestDialog = false }) { Text("Cancel") } }
         )
+    }
+}
+
+@Composable
+fun NominationCard(
+    ownerUid: String,
+    inactivityDays: Int,
+    onRequestAccess: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Contact For: $ownerUid", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Text("Wait period: $inactivityDays days", style = MaterialTheme.typography.labelSmall)
+            }
+            Button(
+                onClick = onRequestAccess,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Request Access")
+            }
+        }
     }
 }
 
