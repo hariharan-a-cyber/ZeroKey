@@ -496,6 +496,7 @@ class PasswordViewModel @Inject constructor(
                     .get().await()
                     .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessRequest::class.java)
                 
+                PrivacyLogger.d("PasswordViewModel", "Found ${myRequests.size} requests made by me")
                 activeEmergencyRequests.clear()
                 activeEmergencyRequests.addAll(myRequests)
 
@@ -507,6 +508,7 @@ class PasswordViewModel @Inject constructor(
                     .get().await()
                     .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessRequest::class.java)
                 
+                PrivacyLogger.d("PasswordViewModel", "Found ${forMe.size} pending requests for my vault")
                 pendingEmergencyRequestsForMe.clear()
                 pendingEmergencyRequestsForMe.addAll(forMe)
 
@@ -517,6 +519,7 @@ class PasswordViewModel @Inject constructor(
                     .get().await()
                     .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessConfig::class.java)
                 
+                PrivacyLogger.d("PasswordViewModel", "Found ${nominatedBy.size} vaults that nominated me")
                 vaultsIAmContactFor.clear()
                 vaultsIAmContactFor.addAll(nominatedBy)
             } catch (e: Exception) {
