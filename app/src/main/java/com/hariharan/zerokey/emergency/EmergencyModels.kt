@@ -10,8 +10,9 @@ data class EmergencyAccessConfig(
     val inactivityDays: Int = 0,
     val encryptedVaultKey: String = "", // Vault Key encrypted with contact's public key
     val iv: String = "",
-    val ownerPublicKey: String = "",    // Owner's public key for signature verification
-    val contactPublicKey: String = "",  // Contact's public key used for the encryption
+    val ownerPublicKey: String = "",    // Owner's RSA public key (Identity)
+    val contactPublicKey: String = "",  // Contact's Tink public key (Encryption)
+    val contactIdentityKey: String = "", // Contact's RSA public key (Identity)
     val lastOwnerActivity: Long = System.currentTimeMillis(),
     val setupSignature: String = "",    // Signed by owner: SHA256(ownerUid + trustedContactUid + encryptedVaultKey)
     val status: EmergencyStatus = EmergencyStatus.CONFIGURED

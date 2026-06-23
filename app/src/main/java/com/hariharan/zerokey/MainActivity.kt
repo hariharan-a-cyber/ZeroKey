@@ -296,7 +296,9 @@ class MainActivity : FragmentActivity() {
                     deviceTrustManager.registerCurrentDevice(uid)
                 } catch (_: Exception) {}
                 try {
-                    credentialShareManager.registerMyKeysIfNeeded(applicationContext, uid)
+                    masterPasswordManager.ensureIdentityKeys(applicationContext, uid)
+                    val idKey = masterPasswordManager.getIdentityPublicKey(applicationContext, uid)
+                    credentialShareManager.registerMyKeysIfNeeded(applicationContext, uid, idKey)
                 } catch (_: Exception) {}
             }
         }

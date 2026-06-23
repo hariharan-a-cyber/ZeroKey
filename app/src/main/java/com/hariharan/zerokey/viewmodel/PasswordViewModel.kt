@@ -746,9 +746,12 @@ class PasswordViewModel @Inject constructor(
                 masterPasswordManager.ensureIdentityKeys(context, currentUserId)
                 val ownerPubKey = masterPasswordManager.getIdentityPublicKey(context, currentUserId)!!
 
-                // 2. Fetch contact's public key (using shareManager logic)
+                // 2. Fetch contact's keys
                 val contactPubKeyB64 = shareManager?.fetchPublicKey(contactUid) 
                     ?: throw IllegalArgumentException("Contact not found. They must be a ZeroKey user.")
+                
+                val contactIdentityKeyB64 = shareManager.fetchIdentityKey(contactUid)
+                    ?: throw IllegalArgumentException("Contact has not updated to the latest version of ZeroKey.")
                 
                 // 3. Encrypt Vault Key for contact
                 val contactHandle = com.google.crypto.tink.KeysetHandle.readNoSecret(
@@ -771,6 +774,7 @@ class PasswordViewModel @Inject constructor(
                     iv = "", // Tink handles IV
                     ownerPublicKey = ownerPubKey,
                     contactPublicKey = contactPubKeyB64,
+                    contactIdentityKey = contactIdentityKeyB64,
                     lastOwnerActivity = System.currentTimeMillis(),
                     setupSignature = signature,
                     status = com.hariharan.zerokey.emergency.EmergencyStatus.CONFIGURED

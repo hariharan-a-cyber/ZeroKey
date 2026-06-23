@@ -48,17 +48,30 @@ class CredentialShareManager @Inject constructor(
         } catch (e: Exception) { null }
     }
 
-    /** Publishes this user's public key once. Safe to call on every login. */
-    suspend fun registerMyKeysIfNeeded(context: Context, userId: String) {
-        val privateHandle = getPrivateKeysetHandle(context)
-        if (fetchPublicKey(userId) != null) return
+    suspend fun fetchIdentityKey(userId: String): String? {
+        return try {
+            val snapshot = firestore.collection(COLLECTION_KEYS).document(userId).get().await()
+            snapshot.getString("identityPublicKey")
+        } catch (e: Exception) { null }
+    }
 
+    /** Publishes this user's public keys. Safe to call on every login. */
+    suspend fun registerMyKeysIfNeeded(context: Context, userId: String, identityPublicKey: String?) {
+        val privateHandle = getPrivateKeysetHandle(context)
+        
+        // Always update to ensure identity key is present
         val out = ByteArrayOutputStream()
         privateHandle.publicKeysetHandle.writeNoSecret(BinaryKeysetWriter.withOutputStream(out))
         val publicKeyB64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 
+        val data = mutableMapOf(
+            "userId" to userId,
+            "publicKey" to publicKeyB64
+        )
+        identityPublicKey?.let { data["identityPublicKey"] = it }
+
         firestore.collection(COLLECTION_KEYS).document(userId).set(
-            mapOf("userId" to userId, "publicKey" to publicKeyB64)
+            data, com.google.firebase.firestore.SetOptions.merge()
         ).await()
     }
 

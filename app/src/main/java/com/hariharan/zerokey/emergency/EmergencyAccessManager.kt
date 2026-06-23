@@ -80,8 +80,9 @@ class EmergencyAccessManager(
             if (config.trustedContactUid != request.requesterUid) return AccessRequestResult.Unauthorized
 
             // Verify contact's signature: SHA256(requestId + ownerUid + requesterUid)
+            // We use the contact's Identity Key (RSA) for verification.
             val dataToVerify = request.requestId + request.ownerUid + request.requesterUid
-            if (!verifySignature(dataToVerify, request.requesterSignature, config.contactPublicKey)) {
+            if (!verifySignature(dataToVerify, request.requesterSignature, config.contactIdentityKey)) {
                 return AccessRequestResult.Failure("Invalid requester signature")
             }
 
