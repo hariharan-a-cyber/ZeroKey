@@ -39,7 +39,8 @@ fun EmergencyAccessScreen(
     var showSetupDialog by remember { mutableStateOf(false) }
     var showRequestDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(viewModel.currentUserId) {
+        viewModel.refreshEmergencyConfig()
         viewModel.refreshEmergencyRequests()
     }
 

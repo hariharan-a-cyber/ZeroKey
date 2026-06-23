@@ -62,7 +62,8 @@ class PasswordViewModel @Inject constructor(
     private val emergencyAccessManager: com.hariharan.zerokey.emergency.EmergencyAccessManager? = null
 ) : ViewModel() {
 
-    private var userId: String = "guest"
+    var currentUserId: String by mutableStateOf("guest")
+        private set
 
     private val securityEventManager = SecurityEventManager(auditLogManager)
     private val securityAnalyzer = VaultSecurityAnalyzer(
@@ -475,7 +476,7 @@ class PasswordViewModel @Inject constructor(
     }
 
     fun setUserId(uid: String) {
-        userId = uid
+        currentUserId = uid
         masterPasswordManager.setUserId(uid)
         loadInitialData()
         refreshEmergencyConfig()
@@ -485,13 +486,13 @@ class PasswordViewModel @Inject constructor(
     }
 
     fun refreshEmergencyRequests() {
-        if (userId == "guest") return
+        if (currentUserId == "guest") return
         viewModelScope.launch {
             try {
                 // 1. Requests I've made
                 val myRequests = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("emergency_access_requests")
-                    .whereEqualTo("requesterUid", userId)
+                    .whereEqualTo("requesterUid", currentUserId)
                     .get().await()
                     .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessRequest::class.java)
                 
@@ -501,7 +502,7 @@ class PasswordViewModel @Inject constructor(
                 // 2. Requests for my vault
                 val forMe = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("emergency_access_requests")
-                    .whereEqualTo("ownerUid", userId)
+                    .whereEqualTo("ownerUid", currentUserId)
                     .whereEqualTo("status", com.hariharan.zerokey.emergency.EmergencyStatus.PENDING.name)
                     .get().await()
                     .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessRequest::class.java)
@@ -512,7 +513,7 @@ class PasswordViewModel @Inject constructor(
                 // 3. Vaults that have nominated me
                 val nominatedBy = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("emergency_access_config")
-                    .whereEqualTo("trustedContactUid", userId)
+                    .whereEqualTo("trustedContactUid", currentUserId)
                     .get().await()
                     .toObjects(com.hariharan.zerokey.emergency.EmergencyAccessConfig::class.java)
                 
@@ -531,14 +532,14 @@ class PasswordViewModel @Inject constructor(
                 val requestId = java.util.UUID.randomUUID().toString()
                 
                 // Sign the request: requestId + ownerUid + requesterUid
-                val dataToSign = requestId + ownerUid + userId
-                masterPasswordManager.ensureIdentityKeys(context, userId)
-                val signature = masterPasswordManager.signData(userId, dataToSign)
+                val dataToSign = requestId + ownerUid + currentUserId
+                masterPasswordManager.ensureIdentityKeys(context, currentUserId)
+                val signature = masterPasswordManager.signData(currentUserId, dataToSign)
 
                 val request = com.hariharan.zerokey.emergency.EmergencyAccessRequest(
                     requestId = requestId,
                     ownerUid = ownerUid,
-                    requesterUid = userId,
+                    requesterUid = currentUserId,
                     requesterSignature = signature
                 )
 
@@ -585,7 +586,7 @@ class PasswordViewModel @Inject constructor(
                         timestamp = System.currentTimeMillis()
                     )
                     
-                    val rawVaultKeyB64 = shareMgr.decryptShare(context, mockShare, userId)
+                    val rawVaultKeyB64 = shareMgr.decryptShare(context, mockShare, currentUserId)
                     val rawVaultKey = android.util.Base64.decode(rawVaultKeyB64, android.util.Base64.NO_WRAP)
                     
                     masterPasswordManager.restoreVaultKey(rawVaultKey, request.ownerUid)
@@ -605,8 +606,8 @@ class PasswordViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
-                val signature = masterPasswordManager.signData(userId, requestId + "CANCEL")
-                val result = manager.cancelRequest(userId, requestId, signature)
+                val signature = masterPasswordManager.signData(currentUserId, requestId + "CANCEL")
+                val result = manager.cancelRequest(currentUserId, requestId, signature)
                 if (result is com.hariharan.zerokey.emergency.CancelResult.Cancelled) {
                     refreshEmergencyRequests()
                     onResult(true, "Request cancelled.")
@@ -623,8 +624,8 @@ class PasswordViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
-                val signature = masterPasswordManager.signData(userId, requestId + "APPROVE")
-                val result = manager.manualApprove(userId, requestId, signature)
+                val signature = masterPasswordManager.signData(currentUserId, requestId + "APPROVE")
+                val result = manager.manualApprove(currentUserId, requestId, signature)
                 if (result is com.hariharan.zerokey.emergency.EmergencySetupResult.Success) {
                     refreshEmergencyRequests()
                     onResult(true, "Access granted early.")
@@ -638,9 +639,9 @@ class PasswordViewModel @Inject constructor(
     }
 
     fun refreshIncomingShares() {
-        if (userId == "guest") return
+        if (currentUserId == "guest") return
         viewModelScope.launch {
-            val shares = shareManager?.fetchIncomingShares(userId) ?: emptyList()
+            val shares = shareManager?.fetchIncomingShares(currentUserId) ?: emptyList()
             incomingShares.clear()
             incomingShares.addAll(shares)
         }
@@ -650,7 +651,7 @@ class PasswordViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val mgr = shareManager ?: throw IllegalStateException("Sharing unavailable")
-                val plaintext = mgr.decryptShare(context, share, userId)
+                val plaintext = mgr.decryptShare(context, share, currentUserId)
                 
                 val json = Json { ignoreUnknownKeys = true }
                 val jsonObj = json.parseToJsonElement(plaintext).jsonObject
@@ -693,7 +694,7 @@ class PasswordViewModel @Inject constructor(
             try {
                 val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("emergency_access_config")
-                    .document(userId)
+                    .document(currentUserId)
                     .get()
                     .await()
                 emergencyConfig = doc.toObject(com.hariharan.zerokey.emergency.EmergencyAccessConfig::class.java)
@@ -710,12 +711,12 @@ class PasswordViewModel @Inject constructor(
      * time-since-setup. Best-effort: failures (offline, no config) are silent.
      */
     private fun refreshOwnerActivity() {
-        if (userId.isBlank() || userId == "guest") return
+        if (currentUserId.isBlank() || currentUserId == "guest") return
         viewModelScope.launch {
             try {
                 com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("emergency_access_config")
-                    .document(userId)
+                    .document(currentUserId)
                     .update("lastOwnerActivity", System.currentTimeMillis())
                     .await()
             } catch (_: Exception) {
@@ -739,8 +740,8 @@ class PasswordViewModel @Inject constructor(
                 val vaultKey = masterPasswordManager.getVaultKey() ?: throw IllegalStateException("Vault is locked")
                 
                 // 1. Ensure owner has identity keys for signing
-                masterPasswordManager.ensureIdentityKeys(context, userId)
-                val ownerPubKey = masterPasswordManager.getIdentityPublicKey(context, userId)!!
+                masterPasswordManager.ensureIdentityKeys(context, currentUserId)
+                val ownerPubKey = masterPasswordManager.getIdentityPublicKey(context, currentUserId)!!
 
                 // 2. Fetch contact's public key (using shareManager logic)
                 val contactPubKeyB64 = shareManager?.fetchPublicKey(contactUid) 
@@ -751,15 +752,15 @@ class PasswordViewModel @Inject constructor(
                     com.google.crypto.tink.BinaryKeysetReader.withBytes(android.util.Base64.decode(contactPubKeyB64, android.util.Base64.NO_WRAP))
                 )
                 val hybridEncrypt = contactHandle.getPrimitive(com.google.crypto.tink.HybridEncrypt::class.java)
-                val encryptedVK = hybridEncrypt.encrypt(vaultKey.encoded, "emergency:$userId:$contactUid".toByteArray())
+                val encryptedVK = hybridEncrypt.encrypt(vaultKey.encoded, "emergency:$currentUserId:$contactUid".toByteArray())
                 val encryptedVK_B64 = android.util.Base64.encodeToString(encryptedVK, android.util.Base64.NO_WRAP)
 
                 // 4. Sign the config
-                val dataToSign = userId + contactUid + encryptedVK_B64
-                val signature = masterPasswordManager.signData(userId, dataToSign)
+                val dataToSign = currentUserId + contactUid + encryptedVK_B64
+                val signature = masterPasswordManager.signData(currentUserId, dataToSign)
 
                 val config = com.hariharan.zerokey.emergency.EmergencyAccessConfig(
-                    ownerUid = userId,
+                    ownerUid = currentUserId,
                     trustedContactUid = contactUid,
                     contactEmail = contactEmail,
                     inactivityDays = inactivityDays,
@@ -774,7 +775,10 @@ class PasswordViewModel @Inject constructor(
 
                 val result = manager.setupEmergencyAccess(config)
                 if (result is com.hariharan.zerokey.emergency.EmergencySetupResult.Success) {
-                    refreshEmergencyConfig()
+                    // Update state immediately from the object we just saved
+                    emergencyConfig = config
+
+                    refreshOwnerActivity() // Ensure Device B can discover us immediately
                     onResult(true, "Emergency Access enabled.")
                 } else {
                     onResult(false, (result as com.hariharan.zerokey.emergency.EmergencySetupResult.Failure).reason)
@@ -792,7 +796,7 @@ class PasswordViewModel @Inject constructor(
         viewModelScope.launch {
             isLoadingDevices = true
             try {
-                val devices = manager.getTrustedDevices(userId)
+                val devices = manager.getTrustedDevices(currentUserId)
                 trustedDevices.clear()
                 trustedDevices.addAll(devices)
             } catch (e: Exception) {
@@ -807,7 +811,7 @@ class PasswordViewModel @Inject constructor(
         val manager = deviceTrustManager ?: return
         viewModelScope.launch {
             try {
-                manager.revokeDevice(userId, deviceId)
+                manager.revokeDevice(currentUserId, deviceId)
                 refreshDeviceList()
                 auditLogManager.log(AuditLogManager.EventType.DEVICE_REVOKED, "Revoked trust for ${com.hariharan.zerokey.core.common.PrivacyLogger.mask(deviceId)}")
                 onComplete(true)
