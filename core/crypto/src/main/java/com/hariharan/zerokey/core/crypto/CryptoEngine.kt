@@ -12,13 +12,15 @@ class CryptoEngine {
     fun encryptAesGcm(plaintext: ByteArray, key: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(AES_MODE)
         val secretKey = SecretKeySpec(key, "AES")
-        
-        // Let the provider generate a cryptographically strong random IV
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-        val iv = cipher.iv
+
+        // Generate the IV explicitly with SecureRandom and pass it via
+        // GCMParameterSpec, so behavior is identical on every JCE provider
+        // (don't rely on the provider's default IV generation).
+        val iv = ByteArray(IV_LENGTH).also { java.security.SecureRandom().nextBytes(it) }
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(AUTH_TAG_LENGTH, iv))
         val ciphertext = cipher.doFinal(plaintext)
-        
-        // Return IV + Ciphertext
+
+        // Return IV + Ciphertext (matches decryptAesGcm, which reads the first 12 bytes as IV)
         return iv + ciphertext
     }
 

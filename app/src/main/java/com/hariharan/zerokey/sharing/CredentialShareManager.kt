@@ -166,6 +166,28 @@ class CredentialShareManager @Inject constructor(
         return String(decrypted, Charsets.UTF_8)
     }
 
+    /**
+     * Decrypts an Emergency Access vault-key blob.
+     *
+     * IMPORTANT: this MUST mirror exactly how PasswordViewModel.setupEmergencyAccess
+     * encrypted it:
+     *   - associated data = "emergency:$ownerUid:$contactUid"
+     *   - the plaintext is the RAW vault-key bytes (vaultKey.encoded), NOT base64.
+     * Returns the raw vault-key bytes. Caller should zero them after use.
+     */
+    fun decryptEmergencyVaultKey(
+        context: Context,
+        encryptedPayloadB64: String,
+        ownerUid: String,
+        contactUid: String
+    ): ByteArray {
+        val privateHandle = getPrivateKeysetHandle(context)
+        val hybridDecrypt = privateHandle.getPrimitive(HybridDecrypt::class.java)
+        val contextInfo = "emergency:$ownerUid:$contactUid".toByteArray()
+        val encrypted = Base64.decode(encryptedPayloadB64, Base64.NO_WRAP)
+        return hybridDecrypt.decrypt(encrypted, contextInfo)
+    }
+
     suspend fun deleteShare(shareId: String) {
         firestore.collection(COLLECTION_SHARES).document(shareId).delete().await()
     }

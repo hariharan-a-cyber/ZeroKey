@@ -512,7 +512,13 @@ fun SettingsScreen(
                         FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
                             FirebaseFirestore.getInstance().collection("users").document(uid).set(
                                 mapOf(
-                                    "recoveryBlobs" to material.blobs.map { mapOf("blob" to it.blobB64, "iv" to it.ivB64) }
+                                    "recoveryBlobs" to material.blobs.map {
+                                        mapOf(
+                                            "blob" to it.blobB64,
+                                            "iv" to it.ivB64,
+                                            "vaultKeyFingerprint" to it.vaultKeyFingerprint
+                                        )
+                                    }
                                 ),
                                 SetOptions.merge()
                             )

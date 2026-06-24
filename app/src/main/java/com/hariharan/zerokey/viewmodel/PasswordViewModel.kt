@@ -577,22 +577,24 @@ class PasswordViewModel @Inject constructor(
             try {
                 val manager = emergencyAccessManager ?: throw IllegalStateException("Emergency Access unavailable")
                 val result = manager.claimVaultKey(requestId)
-                
+
                 if (result is com.hariharan.zerokey.emergency.ClaimResult.Success) {
                     val shareMgr = shareManager ?: throw IllegalStateException("Sharing logic unavailable")
-                    val request = activeEmergencyRequests.find { it.requestId == requestId }!!
-                    
-                    val mockShare = com.hariharan.zerokey.sharing.IncomingShare(
-                        id = requestId,
-                        senderUserId = request.ownerUid,
-                        encryptedPayload = result.encryptedVaultKey,
-                        timestamp = System.currentTimeMillis()
+                    val request = activeEmergencyRequests.find { it.requestId == requestId }
+                        ?: return@launch onResult(false, "Request not found locally. Refresh and try again.")
+
+                    // Decrypt with the SAME context + encoding used at setup:
+                    // AAD = "emergency:owner:contact", plaintext = raw vault-key bytes.
+                    val rawVaultKey = shareMgr.decryptEmergencyVaultKey(
+                        context = context,
+                        encryptedPayloadB64 = result.encryptedVaultKey,
+                        ownerUid = request.ownerUid,
+                        contactUid = currentUserId
                     )
-                    
-                    val rawVaultKeyB64 = shareMgr.decryptShare(context, mockShare, currentUserId)
-                    val rawVaultKey = android.util.Base64.decode(rawVaultKeyB64, android.util.Base64.NO_WRAP)
-                    
+
+                    // Switch the in-memory session to the OWNER's vault key.
                     masterPasswordManager.restoreVaultKey(rawVaultKey, request.ownerUid)
+                    java.util.Arrays.fill(rawVaultKey, 0)
                     onResult(true, "Vault unlocked successfully.")
                 } else if (result is com.hariharan.zerokey.emergency.ClaimResult.DelayNotElapsed) {
                     onResult(false, "Security delay not elapsed. ${result.hoursRemaining} hours remaining.")

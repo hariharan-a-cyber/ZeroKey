@@ -24,9 +24,16 @@ service cloud.firestore {
       allow read, write: if isOwner(userId);
     }
 
+    // User document: stores vault_salt, crypto_version, and recoveryBlobs.
+    // Owner-only. None of these are secret on their own (the vault key is never
+    // stored here), but they must only be writable/readable by the owner.
+    // Required for the new-device RESTORE flow and recovery-key generation.
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
     // Emergency Access Configuration — readable ONLY by the owner or the named
-    // trusted contact. (Previously: any signed-in user could read any config,
-    // leaking trusted contacts' UIDs and emails for every ZeroKey user.)
+    // trusted contact.
     match /emergency_access_config/{userId} {
       allow read: if signedIn() && (
         request.auth.uid == userId ||
@@ -35,13 +42,8 @@ service cloud.firestore {
       allow write: if isOwner(userId);
     }
 
-    // Emergency Access Requests — strict scoping.
-    //
-    // SECURITY: the previous wide-open rules let any signed-in user update any
-    // request's status. A trusted contact could create a request and immediately
-    // flip status=GRANTED + approveAt=0 via the Firebase REST API, bypassing the
-    // 48-hour safety window and claiming the vault key. These tightened rules
-    // restrict status/approveAt changes to the OWNER only.
+    // Emergency Access Requests — strict scoping. Status/approveAt changes are
+    // restricted to the OWNER only (defeats the time-lock-bypass attack).
     match /emergency_access_requests/{requestId} {
       allow read: if signedIn() && (
         request.auth.uid == resource.data.ownerUid ||
@@ -89,8 +91,7 @@ service cloud.firestore {
       allow update: if false;
     }
 
-    // Recovery blob metadata (already protected by client-side trial decryption,
-    // but only the owner can write to their own doc).
+    // Recovery blob metadata subcollection (legacy path — kept for compatibility).
     match /users/{userId}/recovery/{docId} {
       allow read, write: if isOwner(userId);
     }
